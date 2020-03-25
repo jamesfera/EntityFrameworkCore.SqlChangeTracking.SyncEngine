@@ -12,6 +12,10 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 {
     public static class EntityTypeExtensions
     {
-       
+        public static bool IsSyncEngineEnabled(this IEntityType entityType)
+            => entityType[SyncEngineAnnotationNames.Enabled] as bool? ?? false;
+
+        public static void SetSyncEngineEnabled(this IMutableEntityType entityType, bool enabled)
+            => entityType.SetOrRemoveAnnotation(SyncEngineAnnotationNames.Enabled, enabled);
     }
 }

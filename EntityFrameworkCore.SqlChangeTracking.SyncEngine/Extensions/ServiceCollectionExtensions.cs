@@ -1,15 +1,35 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 {
     public static class ServiceCollectionExtensions
     {
-        public static IServiceCollection AddSqlChangeTrackingEngine<TContext>(this IServiceCollection services) where TContext : DbContext
+        public static IServiceCollection AddSyncEngine<TContext>(this IServiceCollection services, params Assembly[] assemblies) where TContext : DbContext
         {
-            services.AddSqlChangeTracking<TContext>();
+            services.AddSingleton<ISyncEngine<TContext>, SyncEngine<TContext>>();
 
-            services.AddSingleton<ISqlChangeTrackingEngine, SqlChangeTrackingEngine<TContext>>();
+            services.AddSingleton<IChangeSetProcessorFactory<TContext>, ChangeSetProcessorFactory<TContext>>();
+
+            if (assemblies != null)
+            {
+                var processorInterfaceType = typeof(IChangeSetProcessor<,>);
+                foreach (var assembly in assemblies)
+                {
+                    var processors = assembly.GetTypes().Where(t =>
+                        t.GetInterfaces().Any(i => i.IsGenericType && i.GetGenericTypeDefinition() == processorInterfaceType)).ToArray();
+
+                    foreach (var processor in processors)
+                    {
+                        services.AddTransient(processor.GetInterfaces().First(i => i.Name == processorInterfaceType.Name), processor);
+                    }
+                }
+            }
 
             return services;
         }

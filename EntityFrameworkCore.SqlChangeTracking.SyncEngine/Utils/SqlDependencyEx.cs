@@ -1,16 +1,15 @@
-﻿using System.IO;
-using System.Xml;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.SqlClient;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
+using System.Xml;
 using System.Xml.Linq;
 
-
-namespace AppleExpress.Inventory.Legacy.Outbound
+namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
 {
 
 
@@ -489,7 +488,7 @@ namespace AppleExpress.Inventory.Legacy.Outbound
 
         public string SchemaName { get; private set; }
 
-        public NotificationTypes NotificaionTypes { get; private set; }
+        public NotificationTypes NotificationType { get; private set; }
 
         public bool DetailsIncluded { get; private set; }
 
@@ -514,7 +513,7 @@ namespace AppleExpress.Inventory.Legacy.Outbound
             this.DatabaseName = databaseName;
             this.TableName = tableName;
             this.SchemaName = schemaName;
-            this.NotificaionTypes = listenerType;
+            this.NotificationType = listenerType;
             this.DetailsIncluded = receiveDetails;
             this.Identity = identity;
         }
@@ -728,11 +727,11 @@ namespace AppleExpress.Inventory.Legacy.Outbound
         private string GetTriggerTypeByListenerType()
         {
             StringBuilder result = new StringBuilder();
-            if (this.NotificaionTypes.HasFlag(NotificationTypes.Insert))
+            if (this.NotificationType.HasFlag(NotificationTypes.Insert))
                 result.Append("INSERT");
-            if (this.NotificaionTypes.HasFlag(NotificationTypes.Update))
+            if (this.NotificationType.HasFlag(NotificationTypes.Update))
                 result.Append(result.Length == 0 ? "UPDATE" : ", UPDATE");
-            if (this.NotificaionTypes.HasFlag(NotificationTypes.Delete))
+            if (this.NotificationType.HasFlag(NotificationTypes.Delete))
                 result.Append(result.Length == 0 ? "DELETE" : ", DELETE");
             if (result.Length == 0) result.Append("INSERT");
 
