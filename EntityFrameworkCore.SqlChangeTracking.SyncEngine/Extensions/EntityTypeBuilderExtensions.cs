@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Models;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
 namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
@@ -14,6 +15,8 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
             entityTypeBuilder.WithSqlChangeTracking();
 
             entityTypeBuilder.Metadata.SetSyncEngineEnabled(true);
+
+            entityTypeBuilder.Metadata.Model.SafeAddEntityType(typeof(LastSyncedChangeVersion));
 
             return entityTypeBuilder;
         }

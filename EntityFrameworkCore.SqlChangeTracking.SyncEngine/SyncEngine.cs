@@ -34,7 +34,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
             _serviceScopeFactory = serviceScopeFactory;
         }
         
-        public async Task Start()
+        public Task Start()
         {
             IEntityType[] syncEngineEntityTypes;
             string databaseName;
@@ -48,6 +48,8 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
                 databaseName = dbContext.Database.GetDbConnection().Database;
             }
 
+            SqlDependencyEx.CleanDatabase(_configuration.GetConnectionString("LegacyConnection"), databaseName);
+
             _logger.LogInformation("Found {entityTrackingCount} Entities with Sync Engine enabled", syncEngineEntityTypes.Length);
 
             foreach (var entityType in syncEngineEntityTypes)
@@ -58,62 +60,74 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
                 var sqlTableDependency = new SqlDependencyEx(_configuration.GetConnectionString("LegacyConnection"), databaseName, tableName, identity: _SqlDependencyIdentity);
 
-                sqlTableDependency.TableChanged += async (object sender, SqlDependencyEx.TableChangedEventArgs e) =>
-                {
-                    ChangeSetProcessorContext<TDbContext> handlerContext = null;
+                _logger.LogDebug("Create SqlDependency on table {tableName} with identity: {sqlDependencyId}", tableName, _SqlDependencyIdentity);
 
-                    try
-                    {
-                        using var serviceScope = _serviceScopeFactory.CreateScope();
-                    
-                        var dbContext = serviceScope.ServiceProvider.GetRequiredService<TDbContext>();
-
-                        var lastChangedVersion = await dbContext.GetLastChangedVersionFor(entityType);
-
-                        var genericMethod = typeof(SqlChangeTracking.DbSetExtensions).GetMethod(nameof(SqlChangeTracking.DbSetExtensions
-                            .GetChangesSinceVersion));
-
-                        var dbSet = dbContext.GetType().GetProperty(entityType.ClrType.Name).GetValue(dbContext);
-
-                        var method = genericMethod.MakeGenericMethod(entityType.ClrType);
-
-                        var results = method.Invoke(null, new[] { dbSet , lastChangedVersion });
-
-                        var resultsList = results as IEnumerable<ChangeTrackingEntry>;
-
-                        if(!resultsList.Any())
-                            return;
-
-                        handlerContext = new ChangeSetProcessorContext<TDbContext>(dbContext);
-                    
-                        var changeHandler = _changeSetProcessorFactory.GetChangeSetProcessorForEntity(entityType);
-
-                        Type handlerType = changeHandler.GetType();
-
-                        await (Task) handlerType.GetMethod(nameof(IChangeSetProcessor<object, TDbContext>.ProcessChanges))
-                            .Invoke(changeHandler, new[] { results, handlerContext});
-
-                        if (handlerContext.RecordCurrentVersion)
-                            await dbContext.SetLastChangedVersionFor(entityType, resultsList.Max(r => r.ChangeVersion));
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "ERROR");
-                    }
-                    finally
-                    {
-                        handlerContext?.Dispose();
-                    }
-                };
+                sqlTableDependency.TableChanged += async (object sender, SqlDependencyEx.TableChangedEventArgs e) => await ProcessChangeEvent(sender);
 
                 _sqlTableDependencies.Add(sqlTableDependency);
 
-                _logger.LogInformation("Sql Change Tracking Engine configured for Entity: {entityTypeName}", entityType.Name);
+                _logger.LogInformation("Sync Engine configured for Entity: {entityTypeName}", entityType.Name);
             }
 
             _sqlTableDependencies.ForEach(s => s.Start());
 
-            //return Task.CompletedTask;
+            return Task.CompletedTask;
+        }
+
+        async Task ProcessChangeEvent(object sender)
+        {
+            ChangeSetProcessorContext<TDbContext> handlerContext = null;
+            
+            try
+            {
+                var tableName = ((SqlDependencyEx)sender).TableName;
+
+                _logger.LogInformation("Change detected in table: {tableName}", tableName);
+                
+                using var serviceScope = _serviceScopeFactory.CreateScope();
+
+                var dbContext = serviceScope.ServiceProvider.GetRequiredService<TDbContext>();
+
+                IEntityType entityType = dbContext.Model.GetEntityTypes().FirstOrDefault(e => e.GetTableName() == tableName);
+
+                var lastChangedVersion = await dbContext.GetLastChangedVersionFor(entityType);
+
+                var getChangesMethod = typeof(SqlChangeTracking.DbSetExtensions).GetMethod(nameof(SqlChangeTracking.DbSetExtensions
+                    .GetChangesSinceVersion));
+
+                var dbSetType = typeof(DbSet<>).MakeGenericType(entityType.ClrType);
+
+                var dbSet = dbContext.GetType().GetProperties().FirstOrDefault(p => p.PropertyType == dbSetType)?.GetValue(dbContext);
+                
+                var getChangesForEntity = getChangesMethod.MakeGenericMethod(entityType.ClrType);
+
+                var results = getChangesForEntity.Invoke(null, new[] { dbSet, lastChangedVersion });
+
+                var resultsList = results as IEnumerable<ChangeTrackingEntry>;
+
+                if (!resultsList.Any())
+                    return;
+
+                handlerContext = new ChangeSetProcessorContext<TDbContext>(dbContext);
+
+                var changeHandler = _changeSetProcessorFactory.GetChangeSetProcessorForEntity(entityType);
+
+                Type handlerType = changeHandler.GetType();
+
+                await (Task)handlerType.GetMethod(nameof(IChangeSetProcessor<object, TDbContext>.ProcessChanges))
+                    .Invoke(changeHandler, new[] { results, handlerContext });
+
+                if (handlerContext.RecordCurrentVersion)
+                    await dbContext.SetLastChangedVersionFor(entityType, resultsList.Max(r => r.ChangeVersion));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "ERROR");
+            }
+            finally
+            {
+                handlerContext?.Dispose();
+            }
         }
 
         public void Stop()

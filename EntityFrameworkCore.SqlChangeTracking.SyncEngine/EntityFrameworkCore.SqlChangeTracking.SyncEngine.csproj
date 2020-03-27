@@ -3,14 +3,12 @@
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
     <LangVersion>latest</LangVersion>
+    <nullable>enable</nullable>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="EntityFrameworkCore.SqlChangeTracking" Version="0.1.35" />
     <PackageReference Include="System.Data.SqlClient" Version="4.8.1" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\..\EntityFrameworkCore.SqlChangeTracking\EntityFrameworkCore.SqlChangeTracking\EntityFrameworkCore.SqlChangeTracking.csproj" />
   </ItemGroup>
 
   <ItemGroup>

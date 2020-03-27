@@ -548,15 +548,11 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
                 if (ActiveEntities.Contains(Identity))
                     ActiveEntities.Remove(Identity);
 
-            if ((_threadSource == null) || (_threadSource.Token.IsCancellationRequested))
-            {
+            if (_threadSource == null || _threadSource.IsCancellationRequested)
                 return;
-            }
 
             if (!_threadSource.Token.CanBeCanceled)
-            {
                 return;
-            }
 
             _threadSource.Cancel();
             _threadSource.Dispose();
