@@ -7,7 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="EntityFrameworkCore.SqlChangeTracking" Version="0.2.0-alpha0011" />
+    <PackageReference Include="EntityFrameworkCore.SqlChangeTracking" Version="0.2.0-alpha0016" />
     <PackageReference Include="MediatR.Extensions.Microsoft.DependencyInjection" Version="8.0.0" />
     <PackageReference Include="Microsoft.SourceLink.GitHub" Version="1.0.0">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -18,10 +18,6 @@
 
   <ItemGroup>
     <Folder Include="Exceptions\" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\..\EntityFrameworkCore.SqlChangeTracking\EntityFrameworkCore.SqlChangeTracking\EntityFrameworkCore.SqlChangeTracking.csproj" />
   </ItemGroup>
 
 </Project>
