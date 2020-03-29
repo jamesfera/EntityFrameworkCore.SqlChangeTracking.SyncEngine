@@ -1,39 +1,50 @@
 ﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Linq.Expressions;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using EntityFrameworkCore.SqlChangeTracking.Models;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Extensions;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils;
+using MediatR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Metadata.Internal;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 {
-    public class SyncEngine<TDbContext> : ISyncEngine<TDbContext> where TDbContext : DbContext
+    public class SyncEngine<TContext> : ISyncEngine<TContext> where TContext : DbContext
     {
-        private IConfiguration _configuration;
+        readonly IConfiguration _configuration;
 
-        private ILogger<SyncEngine<TDbContext>> _logger;
-        private IChangeSetProcessorFactory<TDbContext> _changeSetProcessorFactory;
-        private IServiceScopeFactory _serviceScopeFactory;
+        readonly ILogger<SyncEngine<TContext>> _logger;
 
-        private List<SqlDependencyEx> _sqlTableDependencies = new List<SqlDependencyEx>();
+        readonly IServiceScopeFactory _serviceScopeFactory;
+        readonly IMediator _mediator;
+
+        readonly List<SqlDependencyEx> _sqlTableDependencies = new List<SqlDependencyEx>();
+
+        Dictionary<string, IEntityType> _tableNameToEntityTypeMappings;
+
+        IChangeSetProcessorFactory<TContext> _changeSetProcessorFactory;
 
         static int _SqlDependencyIdentity = 0;
 
-        public SyncEngine(IConfiguration configuration, ILogger<SyncEngine<TDbContext>> logger, IChangeSetProcessorFactory<TDbContext> changeSetProcessorFactory, IServiceScopeFactory serviceScopeFactory)
+        public SyncEngine(IConfiguration configuration, ILogger<SyncEngine<TContext>> logger, IServiceScopeFactory serviceScopeFactory, IMediator mediator, IChangeSetProcessorFactory<TContext> changeSetProcessorFactory)
         {
             _configuration = configuration;
             _logger = logger;
-            _changeSetProcessorFactory = changeSetProcessorFactory;
             _serviceScopeFactory = serviceScopeFactory;
+            _mediator = mediator;
+            _changeSetProcessorFactory = changeSetProcessorFactory;
         }
-        
+
         public Task Start()
         {
             IEntityType[] syncEngineEntityTypes;
@@ -41,7 +52,12 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
             using (var serviceScope = _serviceScopeFactory.CreateScope())
             {
-                var dbContext = serviceScope.ServiceProvider.GetRequiredService<TDbContext>();
+                var dbContext = serviceScope.ServiceProvider.GetRequiredService<TContext>();
+
+                if (!dbContext.Database.IsSqlServer())
+                    throw new InvalidOperationException("Sync Engine is only compatible with Sql Server.  Configure the DbContext with .UseSqlServer().");
+
+                _tableNameToEntityTypeMappings = dbContext.Model.GetEntityTypes().ToDictionary(e => e.GetTableName(), e => e);
 
                 syncEngineEntityTypes = dbContext.Model.GetEntityTypes().Where(EntityTypeExtensions.IsSyncEngineEnabled).ToArray();
 
@@ -60,9 +76,9 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
                 var sqlTableDependency = new SqlDependencyEx(_configuration.GetConnectionString("LegacyConnection"), databaseName, tableName, identity: _SqlDependencyIdentity);
 
-                _logger.LogDebug("Create SqlDependency on table {tableName} with identity: {sqlDependencyId}", tableName, _SqlDependencyIdentity);
+                _logger.LogDebug("Created SqlDependency on table {tableName} with identity: {sqlDependencyId}", tableName, _SqlDependencyIdentity);
 
-                sqlTableDependency.TableChanged += async (object sender, SqlDependencyEx.TableChangedEventArgs e) => await ProcessChangeEvent(sender);
+                sqlTableDependency.TableChanged += async (object sender, SqlDependencyEx.TableChangedEventArgs e) => await ProcessChangeEvent(sender, e);
 
                 _sqlTableDependencies.Add(sqlTableDependency);
 
@@ -74,59 +90,21 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
             return Task.CompletedTask;
         }
 
-        async Task ProcessChangeEvent(object sender)
+        async Task ProcessChangeEvent(object sender, SqlDependencyEx.TableChangedEventArgs e)
         {
-            ChangeSetProcessorContext<TDbContext> handlerContext = null;
-            
+            string? tableName = null;
+
             try
             {
-                var tableName = ((SqlDependencyEx)sender).TableName;
-
+                tableName = ((SqlDependencyEx)sender).TableName;
+                
                 _logger.LogInformation("Change detected in table: {tableName}", tableName);
-                
-                using var serviceScope = _serviceScopeFactory.CreateScope();
 
-                var dbContext = serviceScope.ServiceProvider.GetRequiredService<TDbContext>();
-
-                IEntityType entityType = dbContext.Model.GetEntityTypes().FirstOrDefault(e => e.GetTableName() == tableName);
-
-                var lastChangedVersion = await dbContext.GetLastChangedVersionFor(entityType);
-
-                var getChangesMethod = typeof(SqlChangeTracking.DbSetExtensions).GetMethod(nameof(SqlChangeTracking.DbSetExtensions
-                    .GetChangesSinceVersion));
-
-                var dbSetType = typeof(DbSet<>).MakeGenericType(entityType.ClrType);
-
-                var dbSet = dbContext.GetType().GetProperties().FirstOrDefault(p => p.PropertyType == dbSetType)?.GetValue(dbContext);
-                
-                var getChangesForEntity = getChangesMethod.MakeGenericMethod(entityType.ClrType);
-
-                var results = getChangesForEntity.Invoke(null, new[] { dbSet, lastChangedVersion });
-
-                var resultsList = results as IEnumerable<ChangeTrackingEntry>;
-
-                if (!resultsList.Any())
-                    return;
-
-                handlerContext = new ChangeSetProcessorContext<TDbContext>(dbContext);
-
-                var changeHandler = _changeSetProcessorFactory.GetChangeSetProcessorForEntity(entityType);
-
-                Type handlerType = changeHandler.GetType();
-
-                await (Task)handlerType.GetMethod(nameof(IChangeSetProcessor<object, TDbContext>.ProcessChanges))
-                    .Invoke(changeHandler, new[] { results, handlerContext });
-
-                if (handlerContext.RecordCurrentVersion)
-                    await dbContext.SetLastChangedVersionFor(entityType, resultsList.Max(r => r.ChangeVersion));
+                await _mediator.Publish(new TableChangedNotification<TContext>(_tableNameToEntityTypeMappings[tableName], e.NotificationType.ToChangeOperation()));
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "ERROR");
-            }
-            finally
-            {
-                handlerContext?.Dispose();
+                _logger.LogError(ex, "Error processing Change Event for Table: {tableName}", tableName);
             }
         }
 

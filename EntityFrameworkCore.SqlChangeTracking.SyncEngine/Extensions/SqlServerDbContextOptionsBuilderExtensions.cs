@@ -13,7 +13,16 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
         public static SqlServerDbContextOptionsBuilder EnableSyncEngine(this SqlServerDbContextOptionsBuilder sqlBuilder)
         {
             sqlBuilder.EnableSqlChangeTracking();
-            
+
+            var builder = ((IRelationalDbContextOptionsBuilderInfrastructure)sqlBuilder).OptionsBuilder;
+
+            var coreOptions = builder.Options.GetExtension<CoreOptionsExtension>();
+
+            if (coreOptions.InternalServiceProvider == null)
+            {
+
+            }
+
             return sqlBuilder;
         }
     }

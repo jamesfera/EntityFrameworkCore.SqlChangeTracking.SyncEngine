@@ -7,5 +7,11 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Models
         [Key]
         public string TableName { get; private set; }
         public long LastSyncedVersion { get; set; }
+
+        public LastSyncedChangeVersion(string tableName, long lastSyncedVersion)
+        {
+            TableName = tableName;
+            LastSyncedVersion = lastSyncedVersion;
+        }
     }
 }

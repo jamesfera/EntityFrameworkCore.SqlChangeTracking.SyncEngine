@@ -7,21 +7,41 @@ using System.Threading.Tasks;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Extensions
 {
     public static class DbContextExtensions
     {
-        public static Task<long?> GetLastChangedVersionFor(this DbContext db, IEntityType entityType)
+        public static async Task<long?> GetLastChangedVersionFor(this DbContext db, IEntityType entityType)
         {
-            using var innerContext = new ContextForQueryType<LastSyncedChangeVersion>(db.Database.GetDbConnection());
-            
-            return Task.FromResult(innerContext.Set<LastSyncedChangeVersion>().FirstOrDefaultAsync(t => t.TableName == entityType.GetTableName())?.Result?
-                .LastSyncedVersion);
+            await using var innerContext = new ContextForQueryType<LastSyncedChangeVersion>(db.Database.GetDbConnection(), m => m.Entity<LastSyncedChangeVersion>());
+
+            var entry = await innerContext.Set<LastSyncedChangeVersion>().FirstOrDefaultAsync(t => t.TableName == entityType.GetTableName());
+
+            return entry?.LastSyncedVersion;
+        }
+
+        public static Task<long?> GetLastChangedVersionFor<T>(this DbContext db)
+        {
+            var entityType = db.Model.FindEntityType(typeof(T));
+
+            return GetLastChangedVersionFor(db, entityType);
         }
 
         public static async Task SetLastChangedVersionFor(this DbContext db, IEntityType entityType, long version)
         {
+            //await using var innerContext = new ContextForQueryType<LastSyncedChangeVersion>(db.Database.GetDbConnection(), m => m.Entity<LastSyncedChangeVersion>());
+
+            //innerContext.Set<LastSyncedChangeVersion>().Update(new LastSyncedChangeVersion(entityType.GetTableName(), version));
+
+            
+            
+
+            //await innerContext.Database.UseTransactionAsync(db.Database.CurrentTransaction.GetDbTransaction());
+
+            //await innerContext.SaveChangesAsync(false);
+
             var tableName = nameof(LastSyncedChangeVersion);
 
             var keyColumn = nameof(LastSyncedChangeVersion.TableName);
@@ -52,22 +72,29 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Extensions
         private class ContextForQueryType<T> : DbContext where T : class
         {
             private readonly DbConnection connection;
+            private readonly Action<ModelBuilder> _modelBuilderConfig;
 
-            public ContextForQueryType(DbConnection connection)
+            public ContextForQueryType(DbConnection connection, Action<ModelBuilder> modelBuilderConfig = null)
             {
                 this.connection = connection;
+                _modelBuilderConfig = modelBuilderConfig;
+                
             }
 
             protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
             {
-                optionsBuilder.UseSqlServer(connection, options => options.EnableRetryOnFailure());
-
+                optionsBuilder.UseSqlServer(connection);
+                Database.AutoTransactionsEnabled = false;
                 base.OnConfiguring(optionsBuilder);
             }
 
             protected override void OnModelCreating(ModelBuilder modelBuilder)
             {
-                modelBuilder.Entity<T>().HasNoKey();
+                _modelBuilderConfig?.Invoke(modelBuilder);
+
+                if (_modelBuilderConfig == null)
+                    modelBuilder.Entity<T>().HasNoKey();
+
                 base.OnModelCreating(modelBuilder);
             }
         }

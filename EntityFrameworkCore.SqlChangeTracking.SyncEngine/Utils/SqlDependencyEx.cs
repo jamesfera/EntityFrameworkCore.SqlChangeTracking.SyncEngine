@@ -37,29 +37,20 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
                 this.notificationMessage = notificationMessage;
             }
 
-            public XElement Data
-            {
-                get
-                {
-                    if (string.IsNullOrWhiteSpace(notificationMessage)) return null;
+            private XElement? _data;
 
-                    return ReadXDocumentWithInvalidCharacters(notificationMessage);
-                }
-            }
+            public XElement? Data => _data ??= string.IsNullOrWhiteSpace(notificationMessage) ? null : ReadXDocumentWithInvalidCharacters(notificationMessage);
 
-            public NotificationTypes NotificationType
-            {
-                get
-                {
-                    return (Data != null ? Data.Element(INSERTED_TAG) : null) != null
-                        ? (Data != null ? Data.Element(DELETED_TAG) : null) != null
-                            ? NotificationTypes.Update
-                            : NotificationTypes.Insert
-                        : (Data != null ? Data.Element(DELETED_TAG) : null) != null
-                            ? NotificationTypes.Delete
-                            : NotificationTypes.None;
-                }
-            }
+            private NotificationTypes? _notificationType;
+
+            public NotificationTypes NotificationType => (_notificationType ??=
+                (Data?.Element(INSERTED_TAG) != null
+                    ? Data?.Element(DELETED_TAG) != null
+                        ? NotificationTypes.Update
+                        : NotificationTypes.Insert
+                    : Data?.Element(DELETED_TAG) != null
+                        ? NotificationTypes.Delete
+                        : NotificationTypes.None) as NotificationTypes?).Value;
 
             /// <summary>
             /// Converts an xml string into XElement with no invalid characters check.
@@ -73,13 +64,12 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
 
                 XmlReaderSettings xmlReaderSettings = new XmlReaderSettings {CheckCharacters = false};
 
-                using (var stream = new StringReader(xml))
-                using (XmlReader xmlReader = XmlReader.Create(stream, xmlReaderSettings))
-                {
+                using var stream = new StringReader(xml);
+                using XmlReader xmlReader = XmlReader.Create(stream, xmlReaderSettings);
+
                     // Load our XDocument
-                    xmlReader.MoveToContent();
-                    xDocument = XDocument.Load(xmlReader);
-                }
+                xmlReader.MoveToContent();
+                xDocument = XDocument.Load(xmlReader);
 
                 return xDocument.Root;
             }
@@ -629,13 +619,12 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
 
         private static void ExecuteNonQuery(string commandText, string connectionString)
         {
-            using (SqlConnection conn = new SqlConnection(connectionString))
-            using (SqlCommand command = new SqlCommand(commandText, conn))
-            {
-                conn.Open();
-                command.CommandType = CommandType.Text;
-                command.ExecuteNonQuery();
-            }
+            using var conn = new SqlConnection(connectionString);
+            using var command = new SqlCommand(commandText, conn);
+
+            conn.Open();
+            command.CommandType = CommandType.Text;
+            command.ExecuteNonQuery();
         }
 
         private string ReceiveEvent()
@@ -647,19 +636,19 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
                 COMMAND_TIMEOUT / 2,
                 this.SchemaName);
 
-            using (SqlConnection conn = new SqlConnection(this.ConnectionString))
-            using (SqlCommand command = new SqlCommand(commandText, conn))
-            {
-                conn.Open();
-                command.CommandType = CommandType.Text;
-                command.CommandTimeout = COMMAND_TIMEOUT;
-                using (var reader = command.ExecuteReader())
-                {
-                    if (!reader.Read() || reader.IsDBNull(0)) return string.Empty;
+            using var conn = new SqlConnection(this.ConnectionString);
+            using var command = new SqlCommand(commandText, conn);
 
-                    return reader.GetString(0);
-                }
-            }
+            conn.Open();
+            command.CommandType = CommandType.Text;
+            command.CommandTimeout = COMMAND_TIMEOUT;
+
+            using var reader = command.ExecuteReader();
+
+            if (!reader.Read() || reader.IsDBNull(0))
+                return string.Empty;
+
+            return reader.GetString(0);
         }
 
         private string GetUninstallNotificationProcedureScript()
@@ -758,18 +747,12 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
 
         private void OnTableChanged(string message)
         {
-            var evnt = this.TableChanged;
-            if (evnt == null) return;
-
-            evnt.Invoke(this, new TableChangedEventArgs(message));
+            TableChanged?.Invoke(this, new TableChangedEventArgs(message));
         }
 
         private void OnNotificationProcessStopped()
         {
-            var evnt = NotificationProcessStopped;
-            if (evnt == null) return;
-
-            evnt.BeginInvoke(this, EventArgs.Empty, null, null);
+            NotificationProcessStopped?.BeginInvoke(this, EventArgs.Empty, null, null);
         }
     }
 }
