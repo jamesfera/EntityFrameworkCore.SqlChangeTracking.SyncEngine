@@ -11,16 +11,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="EntityFrameworkCore.SqlChangeTracking" Version="0.2.0-alpha0018" />
+    <PackageReference Include="EntityFrameworkCore.SqlChangeTracking" Version="0.2.0-alpha0019" />
     <PackageReference Include="System.Data.SqlClient" Version="4.8.1" />
   </ItemGroup>
 
   <ItemGroup>
     <Folder Include="Exceptions\" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\..\EntityFrameworkCore.SqlChangeTracking\EntityFrameworkCore.SqlChangeTracking\EntityFrameworkCore.SqlChangeTracking.csproj" />
   </ItemGroup>
 
 </Project>
