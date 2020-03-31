@@ -31,6 +31,7 @@ jobs:
     - name: Build with dotnet
       run: |
         nuget sources add -name "GPR" -Source https://nuget.pkg.github.com/jamesfera/index.json -Username jamesfera -Password ${{ secrets.GITHUB_TOKEN }}
+        nuget setapikey ${{ secrets.GITHUB_TOKEN }} -Source GPR
         dotnet add ./EntityFrameworkCore.SqlChangeTracking.SyncEngine/ package Microsoft.SourceLink.GitHub
         dotnet build --configuration Release
     - name: Test with dotnet
