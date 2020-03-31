@@ -30,8 +30,7 @@ jobs:
         setversion -r $(dotnet-gitversion -showvariable NugetVersionV2)
     - name: Build with dotnet
       run: |
-        nuget sources add -name "GPR" -Source https://nuget.pkg.github.com/jamesfera/index.json -Username jamesfera -Password ${{ secrets.GITHUB_GPR_KEY }}
-        nuget setapikey ${{ secrets.GITHUB_GPR_KEY }} -Source GPR
+        nuget sources add -name "GPR" -Source https://nuget.pkg.github.com/jamesfera/index.json -Username jamesfera -StorePasswordInClearText ${{ secrets.GITHUB_TOKEN }}        
         dotnet add ./EntityFrameworkCore.SqlChangeTracking.SyncEngine/ package Microsoft.SourceLink.GitHub
         dotnet build --configuration Release
     - name: Test with dotnet
