@@ -8,7 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 {
-    public class ChangeSetProcessorFactory<TDbContext> : IChangeSetProcessorFactory<TDbContext> where TDbContext : DbContext
+    public class ChangeSetProcessorFactory<TContext> : IChangeSetProcessorFactory<TContext> where TContext : DbContext
     {
         private readonly IServiceProvider _serviceProvider;
 
@@ -17,13 +17,18 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
             _serviceProvider = serviceProvider;
         }
 
-        public object GetChangeSetProcessorForEntity(IEntityType entityType) 
+        public IEnumerable<object> GetChangeSetProcessorsForEntity(IEntityType entityType, string syncContext) 
         {
             try
             {
-                var handlerType = typeof(IChangeSetProcessor<,>).MakeGenericType(entityType.ClrType, typeof(TDbContext));
+                var handlerType = typeof(IChangeSetProcessor<,>).MakeGenericType(entityType.ClrType, typeof(TContext));
 
-                return _serviceProvider.GetRequiredService(handlerType);
+                var ientity = entityType.ClrType.Assembly.GetType("AppleExpress.Inventory.Data.IEntity");
+
+                //if (ientity != null)
+                //    handlerType = typeof(IChangeSetProcessor<,>).MakeGenericType(ientity, typeof(TContext));
+
+                return _serviceProvider.GetServices(handlerType);
             }
             catch (Exception ex)
             {

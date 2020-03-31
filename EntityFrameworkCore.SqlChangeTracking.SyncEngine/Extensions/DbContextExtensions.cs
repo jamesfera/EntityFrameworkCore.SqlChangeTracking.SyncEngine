@@ -13,23 +13,23 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Extensions
 {
     public static class DbContextExtensions
     {
-        public static async Task<long?> GetLastChangedVersionFor(this DbContext db, IEntityType entityType)
+        public static async Task<long?> GetLastChangedVersionFor(this DbContext db, IEntityType entityType, string syncContext)
         {
-            await using var innerContext = new ContextForQueryType<LastSyncedChangeVersion>(db.Database.GetDbConnection(), m => m.Entity<LastSyncedChangeVersion>());
+            await using var innerContext = new ContextForQueryType<LastSyncedChangeVersion>(db.Database.GetDbConnection(), m => m.ApplyConfiguration(new LastSyncedChangeVersion()));
 
-            var entry = await innerContext.Set<LastSyncedChangeVersion>().FirstOrDefaultAsync(t => t.TableName == entityType.GetTableName());
+            var entry = await innerContext.Set<LastSyncedChangeVersion>().FirstOrDefaultAsync(t => t.SyncContext == syncContext && t.TableName == entityType.GetTableName());
 
             return entry?.LastSyncedVersion;
         }
 
-        public static Task<long?> GetLastChangedVersionFor<T>(this DbContext db)
-        {
-            var entityType = db.Model.FindEntityType(typeof(T));
+        //public static Task<long?> GetLastChangedVersionFor<T>(this DbContext db)
+        //{
+        //    var entityType = db.Model.FindEntityType(typeof(T));
 
-            return GetLastChangedVersionFor(db, entityType);
-        }
+        //    return GetLastChangedVersionFor(db, entityType);
+        //}
 
-        public static async Task SetLastChangedVersionFor(this DbContext db, IEntityType entityType, long version)
+        public static async Task SetLastChangedVersionFor(this DbContext db, IEntityType entityType, long version, string syncContext)
         {
             //await using var innerContext = new ContextForQueryType<LastSyncedChangeVersion>(db.Database.GetDbConnection(), m => m.Entity<LastSyncedChangeVersion>());
 
@@ -50,11 +50,11 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Extensions
 
             var sqlString = $@"begin tran
                                UPDATE {tableName} WITH (serializable) set {versionColumn}={version}
-                               WHERE {keyColumn}='{key}'
+                               WHERE {keyColumn}='{key}' AND SyncContext='{syncContext}'
 
                                if @@rowcount = 0
                                begin
-                                  INSERT INTO {tableName} ({keyColumn}, {versionColumn}) values ('{key}',{version})
+                                  INSERT INTO {tableName} ({keyColumn}, SyncContext, {versionColumn}) values ('{key}', '{syncContext}' ,{version})
                                end
                             commit tran";
 

@@ -9,7 +9,6 @@ using System.Threading.Tasks;
 using EntityFrameworkCore.SqlChangeTracking.Models;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Extensions;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils;
-using MediatR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Metadata.Internal;
@@ -22,32 +21,29 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
     public class SyncEngine<TContext> : ISyncEngine<TContext> where TContext : DbContext
     {
         readonly IConfiguration _configuration;
-
         readonly ILogger<SyncEngine<TContext>> _logger;
-
         readonly IServiceScopeFactory _serviceScopeFactory;
-        readonly IMediator _mediator;
+        readonly ITableChangedNotificationDispatcher _tableChangedNotificationDispatcher;
+        readonly IChangeProcessor<TContext> _changeProcessor;
 
         readonly List<SqlDependencyEx> _sqlTableDependencies = new List<SqlDependencyEx>();
-
         Dictionary<string, IEntityType> _tableNameToEntityTypeMappings;
-
-        IChangeSetProcessorFactory<TContext> _changeSetProcessorFactory;
 
         static int _SqlDependencyIdentity = 0;
 
-        public SyncEngine(IConfiguration configuration, ILogger<SyncEngine<TContext>> logger, IServiceScopeFactory serviceScopeFactory, IMediator mediator, IChangeSetProcessorFactory<TContext> changeSetProcessorFactory)
+        public SyncEngine(IConfiguration configuration, ILogger<SyncEngine<TContext>> logger, IServiceScopeFactory serviceScopeFactory,
+            ITableChangedNotificationDispatcher tableChangedNotificationDispatcher, IChangeProcessor<TContext> changeProcessor)
         {
             _configuration = configuration;
             _logger = logger;
             _serviceScopeFactory = serviceScopeFactory;
-            _mediator = mediator;
-            _changeSetProcessorFactory = changeSetProcessorFactory;
+            _tableChangedNotificationDispatcher = tableChangedNotificationDispatcher;
+            _changeProcessor = changeProcessor;
         }
 
-        public Task Start()
+        public async Task Start(bool syncOnStartup, CancellationToken cancellationToken)
         {
-            IEntityType[] syncEngineEntityTypes;
+            List<IEntityType> syncEngineEntityTypes;
             string databaseName;
 
             using (var serviceScope = _serviceScopeFactory.CreateScope())
@@ -59,14 +55,23 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
                 _tableNameToEntityTypeMappings = dbContext.Model.GetEntityTypes().ToDictionary(e => e.GetTableName(), e => e);
 
-                syncEngineEntityTypes = dbContext.Model.GetEntityTypes().Where(EntityTypeExtensions.IsSyncEngineEnabled).ToArray();
-
+                syncEngineEntityTypes = dbContext.Model.GetEntityTypes().Where(EntityTypeExtensions.IsSyncEngineEnabled).ToList();
+                
                 databaseName = dbContext.Database.GetDbConnection().Database;
+
+                if (syncOnStartup)
+                {
+                    _logger.LogInformation("Synchronizing changes since last run...");
+                    
+                    var processChangesTasks = syncEngineEntityTypes.Select(e => _changeProcessor.ProcessChangesForTable(e)).ToArray();
+
+                    await Task.WhenAll(processChangesTasks);
+                }
             }
 
             SqlDependencyEx.CleanDatabase(_configuration.GetConnectionString("LegacyConnection"), databaseName);
 
-            _logger.LogInformation("Found {entityTrackingCount} Entities with Sync Engine enabled", syncEngineEntityTypes.Length);
+            _logger.LogInformation("Found {entityTrackingCount} Entities with Sync Engine enabled", syncEngineEntityTypes.Count);
 
             foreach (var entityType in syncEngineEntityTypes)
             {
@@ -86,8 +91,6 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
             }
 
             _sqlTableDependencies.ForEach(s => s.Start());
-
-            return Task.CompletedTask;
         }
 
         async Task ProcessChangeEvent(object sender, SqlDependencyEx.TableChangedEventArgs e)
@@ -97,10 +100,11 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
             try
             {
                 tableName = ((SqlDependencyEx)sender).TableName;
-                
-                _logger.LogInformation("Change detected in table: {tableName}", tableName);
 
-                await _mediator.Publish(new TableChangedNotification<TContext>(_tableNameToEntityTypeMappings[tableName], e.NotificationType.ToChangeOperation()));
+                using (_logger.BeginScope("DbContext: {dbContext}", typeof(TContext)))
+                    _logger.LogInformation("Change detected in table: {tableName} ", tableName);
+
+                await _tableChangedNotificationDispatcher.Dispatch(new TableChangedNotification(typeof(TContext), _tableNameToEntityTypeMappings[tableName], e.NotificationType.ToChangeOperation()), new CancellationToken());
             }
             catch (Exception ex)
             {
@@ -108,14 +112,14 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
             }
         }
 
-        public void Stop()
+        public async Task Stop(CancellationToken cancellationToken)
         {
             _sqlTableDependencies.ForEach(s => s.Dispose());
         }
 
         public void Dispose()
         {
-            Stop();
+            //Stop().Wait();
         }
     }
 }

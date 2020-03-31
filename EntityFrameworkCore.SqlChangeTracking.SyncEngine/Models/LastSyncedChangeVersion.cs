@@ -1,17 +1,27 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
 namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Models
 {
-    public class LastSyncedChangeVersion
+    public class LastSyncedChangeVersion : IEntityTypeConfiguration<LastSyncedChangeVersion>
     {
-        [Key]
-        public string TableName { get; private set; }
+        public string TableName { get; set; }
+        public string SyncContext { get; set; }
         public long LastSyncedVersion { get; set; }
 
-        public LastSyncedChangeVersion(string tableName, long lastSyncedVersion)
+        //public LastSyncedChangeVersion(string tableName, long lastSyncedVersion)
+        //{
+        //    TableName = tableName;
+        //    LastSyncedVersion = lastSyncedVersion;
+        //}
+
+        public void Configure(EntityTypeBuilder<LastSyncedChangeVersion> builder)
         {
-            TableName = tableName;
-            LastSyncedVersion = lastSyncedVersion;
+            builder.HasKey(e => new { e.TableName, e.SyncContext });
+
+            builder.Property(e => e.TableName).HasMaxLength(100);
+            builder.Property(e => e.SyncContext).HasMaxLength(100);
         }
     }
 }

@@ -4,6 +4,7 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using EntityFrameworkCore.SqlChangeTracking.Models;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Extensions;
@@ -17,68 +18,89 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 {
     public interface IChangeProcessor<TContext> where TContext : DbContext
     {
-        Task ProcessChangesForTable<T>();
-
         Task ProcessChangesForTable(IEntityType entityType);
-
     }
 
     public class ChangeProcessor<TContext> : IChangeProcessor<TContext> where TContext : DbContext
     {
-        private IServiceScopeFactory _serviceScopeFactory;
-        private ILogger<ChangeProcessor<TContext>> _logger;
-        private IChangeSetProcessorFactory<TContext> _changeSetProcessorFactory;
+        readonly IServiceScopeFactory _serviceScopeFactory;
+        readonly ILogger<ChangeProcessor<TContext>> _logger;
 
-        public ChangeProcessor(IServiceScopeFactory serviceScopeFactory, ILogger<ChangeProcessor<TContext>> logger, IChangeSetProcessorFactory<TContext> changeSetProcessorFactory)
+        public ChangeProcessor(IServiceScopeFactory serviceScopeFactory, ILogger<ChangeProcessor<TContext>> logger)
         {
             _serviceScopeFactory = serviceScopeFactory;
             _logger = logger;
-            _changeSetProcessorFactory = changeSetProcessorFactory;
         }
 
-        public async Task ProcessChangesForTable<T>()
-        {
-            using var scope = _serviceScopeFactory.CreateScope();
-
-            var context = scope.ServiceProvider.GetService<DbContext>();
-        }
+        SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
 
         public async Task ProcessChangesForTable(IEntityType entityType)
         {
             try
             {
+                await  _semaphore.WaitAsync();
+
+                _logger.LogInformation("Processing changes for Table: {tableName}", entityType.GetTableName());
+
                 using var serviceScope = _serviceScopeFactory.CreateScope();
 
                 var dbContext = serviceScope.ServiceProvider.GetRequiredService<TContext>();
 
-                var lastChangedVersion = await dbContext.GetLastChangedVersionFor(entityType) ?? 0;
+                var changeSetProcessorFactory = serviceScope.ServiceProvider.GetService<IChangeSetProcessorFactory<TContext>>();
 
-                var changeSet = getChangesFunc(entityType)(dbContext, lastChangedVersion);
+                var syncContexts = entityType.GetSyncContexts();
 
-                if (!changeSet.Any())
-                    return;
+                foreach (var syncContext in syncContexts)
+                {
+                    var lastChangedVersion = await dbContext.GetLastChangedVersionFor(entityType, syncContext) ?? 0;
 
-                using var processorContext = new ChangeSetProcessorContext<TContext>(dbContext);
+                    var changeSet = getChangesFunc(entityType)(dbContext, lastChangedVersion, 3);
+                    
+                    _logger.LogInformation("Found {changeSetCount} change(s) for Table: {tableName} for SyncContext: {syncContext} since version: {version}", changeSet.Count(), entityType.GetTableName(), syncContext, lastChangedVersion);
 
-                var changeSetProcessor = _changeSetProcessorFactory.GetChangeSetProcessorForEntity(entityType);
+                    if (!changeSet.Any())
+                        continue;
+                    
+                    var changeSetProcessors = changeSetProcessorFactory.GetChangeSetProcessorsForEntity(entityType, syncContext).ToArray();
 
-                var processorFunc = generateProcessorFunc(entityType, _changeSetProcessorFactory);
+                    if(!changeSetProcessors.Any())
+                        return;
 
-                await processorFunc(changeSetProcessor, changeSet, processorContext);
+                    using var processorContext = new ChangeSetProcessorContext<TContext>(dbContext);
 
-                if (processorContext.RecordCurrentVersion)
-                    await dbContext.SetLastChangedVersionFor(entityType, changeSet.Max(r => r.ChangeVersion ?? 0));
+                    foreach (var changeSetProcessor in changeSetProcessors)
+                    {
+                        var processorFunc = generateProcessorFunc(entityType, changeSetProcessor);
+
+                        try
+                        {
+                            await processorFunc(changeSetProcessor, changeSet, processorContext);
+                        }
+                        catch (Exception ex)
+                        {
+                            throw;
+                        }
+                    }
+
+                    if (processorContext.RecordCurrentVersion)
+                        await dbContext.SetLastChangedVersionFor(entityType, changeSet.Max(r => r.ChangeVersion ?? 0), syncContext);
+                }
+                
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "ERROR");
             }
+            finally
+            {
+                _semaphore.Release();
+            }
         }
 
-        Func<TContext, long, IEnumerable<ChangeTrackingEntry>> getChangesFunc(IEntityType entityType)
+        Func<TContext, long, int, IEnumerable<ChangeTrackingEntry>> getChangesFunc(IEntityType entityType)
         {
-            var getChangesMethodInfo = typeof(SqlChangeTracking.DbSetExtensions).GetMethod(nameof(SqlChangeTracking.DbSetExtensions
-                .GetChangesSinceVersion)).MakeGenericMethod(entityType.ClrType);
+            var getChangesMethodInfo = typeof(SyncEngine.Extensions.DbSetExtensions).GetMethod(nameof(SyncEngine.Extensions.DbSetExtensions
+                .GetChangesSinceVersion), BindingFlags.NonPublic | BindingFlags.Static).MakeGenericMethod(entityType.ClrType);
 
             var dbSetType = typeof(DbSet<>).MakeGenericType(entityType.ClrType);
 
@@ -91,16 +113,16 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
             var dbSetPropertyExpression = Expression.Property(dbContextParameterExpression, dbSetPropertyInfo);
 
             var versionParameter = Expression.Parameter(typeof(long), "version");
+            var maxResultsParameter = Expression.Parameter(typeof(int), "maxResults");
 
-            var getChangesCallExpression = Expression.Call(getChangesMethodInfo, dbSetPropertyExpression, versionParameter);
+            var getChangesCallExpression = Expression.Call(getChangesMethodInfo, dbSetPropertyExpression, versionParameter, maxResultsParameter);
 
-            var lambda = Expression.Lambda<Func<TContext, long, IEnumerable<ChangeTrackingEntry>>>(getChangesCallExpression, dbContextParameterExpression, versionParameter);
+            var lambda = Expression.Lambda<Func<TContext, long, int, IEnumerable<ChangeTrackingEntry>>>(getChangesCallExpression, dbContextParameterExpression, versionParameter, maxResultsParameter);
 
             return lambda.Compile();
         }
-        Func<object, IEnumerable<ChangeTrackingEntry>, ChangeSetProcessorContext<TContext>, Task> generateProcessorFunc(IEntityType entityType, IChangeSetProcessorFactory<TContext> processorFactory)
+        Func<object, IEnumerable<ChangeTrackingEntry>, ChangeSetProcessorContext<TContext>, Task> generateProcessorFunc(IEntityType entityType, object processor)
         {
-            var processor = processorFactory.GetChangeSetProcessorForEntity(entityType);
             Type processorType = processor.GetType();
 
             var processorParameter = Expression.Parameter(typeof(object), "processor");

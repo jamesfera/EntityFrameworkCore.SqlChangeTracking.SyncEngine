@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
-using MediatR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -15,13 +14,20 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
         {
             services.AddSingleton<ISyncEngine<TContext>, SyncEngine<TContext>>();
 
-            services.AddSingleton<IChangeSetProcessorFactory<TContext>, ChangeSetProcessorFactory<TContext>>();
+            services.AddScoped<IChangeSetProcessorFactory<TContext>, ChangeSetProcessorFactory<TContext>>();
 
             services.AddSingleton<IChangeProcessor<TContext>, ChangeProcessor<TContext>>();
 
-            services.AddSingleton(typeof(INotificationHandler<TableChangedNotification<TContext>>), typeof(TableChangedNotificationHandler<TContext>));
+            services.AddSingleton<ITableChangedNotificationDispatcher, TableChangedNotificationDispatcher>();
 
-            services.AddMediatR(typeof(SqlChangeTrackingAnnotationNames));
+            services.AddTransient<ITableChangedNotificationHandler, ChangeProcessorNotificationHandler>();
+
+            services.AddScoped<DbSetExtensions.ICurrentTrackingContext, DbSetExtensions.CurrentTrackingContext>();
+            services.AddScoped<DbSetExtensions.ICurrentContextSetter, DbSetExtensions.CurrentTrackingContext>();
+
+            //services.AddSingleton(typeof(INotificationHandler<TableChangedNotification<TContext>>), typeof(TableChangedNotificationHandler<TContext>));
+
+            //services.AddMediatR(typeof(SqlChangeTrackingAnnotationNames));
 
             if (assemblies != null)
             {

@@ -1,23 +1,20 @@
 ﻿using System;
 using System.Collections.Generic;
-using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Models;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
 namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 {
     public static class EntityTypeBuilderExtensions
     {
-        public static EntityTypeBuilder<TEntity> WithSyncEngine<TEntity>(this EntityTypeBuilder<TEntity> entityTypeBuilder) where TEntity : class
-            => (EntityTypeBuilder<TEntity>)WithSyncEngine((EntityTypeBuilder)entityTypeBuilder);
+        public static EntityTypeBuilder<TEntity> WithSyncEngine<TEntity>(this EntityTypeBuilder<TEntity> entityTypeBuilder, string syncContext = "Default") where TEntity : class
+            => (EntityTypeBuilder<TEntity>)WithSyncEngine((EntityTypeBuilder)entityTypeBuilder, syncContext);
 
-        public static EntityTypeBuilder WithSyncEngine(this EntityTypeBuilder entityTypeBuilder)
+        public static EntityTypeBuilder WithSyncEngine(this EntityTypeBuilder entityTypeBuilder, string syncContext = "Default")
         {
             entityTypeBuilder.WithSqlChangeTracking();
 
-            entityTypeBuilder.Metadata.SetSyncEngineEnabled(true);
-
-            entityTypeBuilder.Metadata.Model.SafeAddEntityType(typeof(LastSyncedChangeVersion));
-
+            entityTypeBuilder.Metadata.EnableSyncEngine(syncContext);
+           
             return entityTypeBuilder;
         }
     }
