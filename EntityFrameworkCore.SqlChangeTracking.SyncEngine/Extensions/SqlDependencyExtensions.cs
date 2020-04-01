@@ -10,12 +10,12 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Extensions
     {
         public static ChangeOperation ToChangeOperation(this SqlDependencyEx.NotificationTypes notificationType)
         {
-            return notificationType switch 
+            return notificationType switch
             {
                 SqlDependencyEx.NotificationTypes.Insert => ChangeOperation.Insert,
                 SqlDependencyEx.NotificationTypes.Update => ChangeOperation.Update,
                 SqlDependencyEx.NotificationTypes.Delete => ChangeOperation.Delete,
-                _ => ChangeOperation.None
+                SqlDependencyEx.NotificationTypes.None => ChangeOperation.None
             };
         }
     }

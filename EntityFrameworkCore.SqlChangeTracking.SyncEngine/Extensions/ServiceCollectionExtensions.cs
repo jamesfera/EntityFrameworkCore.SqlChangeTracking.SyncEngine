@@ -22,12 +22,8 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
             services.AddTransient<ITableChangedNotificationHandler, ChangeProcessorNotificationHandler>();
 
-            services.AddScoped<DbSetExtensions.ICurrentTrackingContext, DbSetExtensions.CurrentTrackingContext>();
-            services.AddScoped<DbSetExtensions.ICurrentContextSetter, DbSetExtensions.CurrentTrackingContext>();
-
-            //services.AddSingleton(typeof(INotificationHandler<TableChangedNotification<TContext>>), typeof(TableChangedNotificationHandler<TContext>));
-
-            //services.AddMediatR(typeof(SqlChangeTrackingAnnotationNames));
+            //services.AddScoped<DbSetExtensions.ICurrentTrackingContext, DbSetExtensions.CurrentTrackingContext>();
+            //services.AddScoped<DbSetExtensions.ICurrentContextSetter, DbSetExtensions.CurrentTrackingContext>();
 
             if (assemblies != null)
             {
@@ -43,6 +39,14 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
                     }
                 }
             }
+
+            return services;
+        }
+
+        public static IServiceCollection AddHostedSyncEngineService<TContext>(this IServiceCollection services, params Assembly[] assemblies) where TContext : DbContext
+        {
+            services.AddHostedService<SyncEngineHostedService<TContext>>();
+            services.AddSyncEngine<TContext>(assemblies);
 
             return services;
         }

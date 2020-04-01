@@ -50,6 +50,8 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
                 var syncContexts = entityType.GetSyncContexts();
 
+                var clrEntityType = entityType.ClrType;
+
                 foreach (var syncContext in syncContexts)
                 {
                     var lastChangedVersion = await dbContext.GetLastChangedVersionFor(entityType, syncContext) ?? 0;
@@ -60,21 +62,29 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
                     if (!changeSet.Any())
                         continue;
-                    
-                    var changeSetProcessors = changeSetProcessorFactory.GetChangeSetProcessorsForEntity(entityType, syncContext).ToArray();
+
+                    //var it = clrEntityType.GetInterfaces().First();
+
+                    var changeSetProcessors = changeSetProcessorFactory.GetChangeSetProcessorsForEntity(clrEntityType, syncContext).ToArray();
 
                     if(!changeSetProcessors.Any())
                         return;
 
                     using var processorContext = new ChangeSetProcessorContext<TContext>(dbContext);
 
+                    var newSet = changeSet.Select(c => convert(clrEntityType, clrEntityType, c));
+
+                    var ofTypeMethod = typeof(Enumerable).GetMethod(nameof(Enumerable.OfType)).MakeGenericMethod(typeof(ChangeTrackingEntry<>).MakeGenericType(clrEntityType));
+
+                    var res = ofTypeMethod.Invoke(null, new []{ newSet });
+
                     foreach (var changeSetProcessor in changeSetProcessors)
                     {
-                        var processorFunc = generateProcessorFunc(entityType, changeSetProcessor);
+                        var processorFunc = generateProcessorFunc(clrEntityType, changeSetProcessor);
 
                         try
                         {
-                            await processorFunc(changeSetProcessor, changeSet, processorContext);
+                            await processorFunc(changeSetProcessor, res, processorContext);
                         }
                         catch (Exception ex)
                         {
@@ -89,7 +99,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "ERROR");
+                _logger.LogError(ex, "Error Processing Changes for Table: {tableName}", entityType.GetTableName());
             }
             finally
             {
@@ -97,9 +107,22 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
             }
         }
 
+        ChangeTrackingEntry convert(Type interfaceType, Type concreteType, object entry)
+        {
+            var withTypeMethod = typeof(ChangeTrackingEntry<>).MakeGenericType(concreteType).GetMethod(nameof(ChangeTrackingEntry<object>.WithType));
+            var method = withTypeMethod.MakeGenericMethod(interfaceType);
+
+            var entityParam = Expression.Parameter(entry.GetType(), "entity");
+            var withTypeCall = Expression.Call(entityParam, method);
+
+            var lambda = Expression.Lambda(withTypeCall, entityParam).Compile();
+
+            return lambda.DynamicInvoke(entry) as ChangeTrackingEntry;
+        }
+
         Func<TContext, long, int, IEnumerable<ChangeTrackingEntry>> getChangesFunc(IEntityType entityType)
         {
-            var getChangesMethodInfo = typeof(SyncEngine.Extensions.DbSetExtensions).GetMethod(nameof(SyncEngine.Extensions.DbSetExtensions
+            var getChangesMethodInfo = typeof(Extensions.DbSetExtensions).GetMethod(nameof(Extensions.DbSetExtensions
                 .GetChangesSinceVersion), BindingFlags.NonPublic | BindingFlags.Static).MakeGenericMethod(entityType.ClrType);
 
             var dbSetType = typeof(DbSet<>).MakeGenericType(entityType.ClrType);
@@ -114,26 +137,26 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
             var versionParameter = Expression.Parameter(typeof(long), "version");
             var maxResultsParameter = Expression.Parameter(typeof(int), "maxResults");
-
+            
             var getChangesCallExpression = Expression.Call(getChangesMethodInfo, dbSetPropertyExpression, versionParameter, maxResultsParameter);
 
             var lambda = Expression.Lambda<Func<TContext, long, int, IEnumerable<ChangeTrackingEntry>>>(getChangesCallExpression, dbContextParameterExpression, versionParameter, maxResultsParameter);
 
             return lambda.Compile();
         }
-        Func<object, IEnumerable<ChangeTrackingEntry>, ChangeSetProcessorContext<TContext>, Task> generateProcessorFunc(IEntityType entityType, object processor)
+        Func<object, object, ChangeSetProcessorContext<TContext>, Task> generateProcessorFunc(Type entityType, object processor)
         {
             Type processorType = processor.GetType();
 
             var processorParameter = Expression.Parameter(typeof(object), "processor");
-            var changeSetParameter = Expression.Parameter(typeof(IEnumerable<ChangeTrackingEntry>), "changeSet");
+            var changeSetParameter = Expression.Parameter(typeof(object), "changeSet");
             var handlerContextParameter = Expression.Parameter(typeof(ChangeSetProcessorContext<TContext>), "handlerContext");
 
-            var changeSetType = typeof(IEnumerable<>).MakeGenericType(typeof(ChangeTrackingEntry<>).MakeGenericType(entityType.ClrType));
+            var changeSetType = typeof(IEnumerable<>).MakeGenericType(typeof(ChangeTrackingEntry<>).MakeGenericType(entityType)); //(typeof(ChangeTrackingEntry<>).MakeGenericType(entityType)).MakeArrayType();
 
             var processorCall = Expression.Call(Expression.Convert(processorParameter, processorType), processorType.GetMethod(nameof(IChangeSetProcessor<object, TContext>.ProcessChanges)), Expression.Convert(changeSetParameter, changeSetType), handlerContextParameter);
 
-            return Expression.Lambda<Func<object, IEnumerable<ChangeTrackingEntry>, ChangeSetProcessorContext<TContext>, Task>>(processorCall, processorParameter, changeSetParameter, handlerContextParameter).Compile();
+            return Expression.Lambda<Func<object, object, ChangeSetProcessorContext<TContext>, Task>>(processorCall, processorParameter, changeSetParameter, handlerContextParameter).Compile();
         }
     }
 }
