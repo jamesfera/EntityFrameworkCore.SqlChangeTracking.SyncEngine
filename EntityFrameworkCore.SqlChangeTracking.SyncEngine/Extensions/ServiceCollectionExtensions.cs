@@ -2,13 +2,14 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Options;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 {
-    public static class ServiceCollectionExtensions
+    public static partial class ServiceCollectionExtensions
     {
         public static IServiceCollection AddSyncEngine<TContext>(this IServiceCollection services, params Assembly[] assemblies) where TContext : DbContext
         {
@@ -43,12 +44,21 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
             return services;
         }
 
-        public static IServiceCollection AddHostedSyncEngineService<TContext>(this IServiceCollection services, params Assembly[] assemblies) where TContext : DbContext
+        public static IServiceCollection AddHostedSyncEngineService<TContext>(this IServiceCollection services, Action<SyncEngineOptions>? optionsBuilder, params Assembly[] assemblies) where TContext : DbContext
         {
-            services.AddHostedService<SyncEngineHostedService<TContext>>();
+            var options = new SyncEngineOptions();
+
+            optionsBuilder?.Invoke(options);
+
+            services.AddHostedService(s => new SyncEngineHostedService<TContext>(s.GetRequiredService<ISyncEngine<TContext>>(), options));
             services.AddSyncEngine<TContext>(assemblies);
 
             return services;
+        }
+
+        public static IServiceCollection AddHostedSyncEngineService<TContext>(this IServiceCollection services, params Assembly[] assemblies) where TContext : DbContext
+        {
+            return services.AddHostedSyncEngineService<TContext>(null, assemblies);
         }
     }
 }

@@ -40,11 +40,15 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
             {
                 await  _semaphore.WaitAsync();
 
-                _logger.LogInformation("Processing changes for Table: {tableName}", entityType.GetTableName());
+                _logger.LogInformation("Processing changes for Table: {TableName}", entityType.GetFullTableName());
 
                 using var serviceScope = _serviceScopeFactory.CreateScope();
 
                 var dbContext = serviceScope.ServiceProvider.GetRequiredService<TContext>();
+
+                var logContext = dbContext.GetLogContext();
+
+                using var logScope = _logger.BeginScope(logContext);
 
                 var changeSetProcessorFactory = serviceScope.ServiceProvider.GetService<IChangeSetProcessorFactory<TContext>>();
 
@@ -58,7 +62,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
                     var changeSet = getChangesFunc(entityType)(dbContext, lastChangedVersion, 3);
                     
-                    _logger.LogInformation("Found {changeSetCount} change(s) for Table: {tableName} for SyncContext: {syncContext} since version: {version}", changeSet.Count(), entityType.GetTableName(), syncContext, lastChangedVersion);
+                    _logger.LogInformation("Found {ChangeSetCount} change(s) for Table: {TableName} for SyncContext: {SyncContext} since version: {ChangeVersion}", changeSet.Count(), entityType.GetFullTableName(), syncContext, lastChangedVersion);
 
                     if (!changeSet.Any())
                         continue;
@@ -99,7 +103,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error Processing Changes for Table: {tableName}", entityType.GetTableName());
+                _logger.LogError(ex, "Error Processing Changes for Table: {TableName}", entityType.GetFullTableName());
             }
             finally
             {
