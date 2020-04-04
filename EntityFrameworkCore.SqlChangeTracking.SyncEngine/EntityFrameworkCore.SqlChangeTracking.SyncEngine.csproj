@@ -12,12 +12,20 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="EntityFrameworkCore.SqlChangeTracking" Version="0.2.0-alpha0026" />
+    <Compile Remove="ChangeProcessorNotificationHandler.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="EntityFrameworkCore.SqlChangeTracking" Version="0.2.0-alpha0027" />
     <PackageReference Include="System.Data.SqlClient" Version="4.8.1" />
   </ItemGroup>
 
   <ItemGroup>
     <Folder Include="Exceptions\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="ChangeProcessorNotificationHandler.cs" />
   </ItemGroup>
 
   <ItemGroup>

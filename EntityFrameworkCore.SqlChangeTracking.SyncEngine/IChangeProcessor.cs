@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics.Contracts;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -7,109 +8,257 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using EntityFrameworkCore.SqlChangeTracking.Models;
-using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Extensions;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Internal;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 {
+    public interface IChangeSetProcessorRegistration
+    {
+        KeyValuePair<string, Type> Registration { get; }
+    }
+
+    public class ChangeSetProcessorRegistration : IChangeSetProcessorRegistration
+    {
+        public ChangeSetProcessorRegistration(KeyValuePair<string, Type> registration)
+        {
+            Registration = registration;
+        }
+
+        public KeyValuePair<string, Type> Registration { get; }
+    }
+
+    public interface IChangeProcessorFactory<TContext> where TContext : DbContext
+    {
+        IChangeProcessor<TContext> GetChangeProcessor(string syncContext = "Default");
+    }
+
+    internal class ChangeProcessorFactory<TContext> : IChangeProcessorFactory<TContext> where TContext : DbContext
+    {
+        IServiceProvider _serviceProvider;
+        KeyValuePair<string, Type>[] _registrations;
+
+        public ChangeProcessorFactory(IServiceProvider serviceProvider, IEnumerable<IChangeSetProcessorRegistration> registrations)
+        {
+            _serviceProvider = serviceProvider;
+            _registrations = registrations.Select(r => r.Registration).ToArray();
+        }
+
+        public IChangeProcessor<TContext> GetChangeProcessor(string syncContext)
+        {
+            var changeSetProcessorFactory = new InternalChangeSetProcessorFactory(_serviceProvider, _registrations.Where(r => r.Key == syncContext).Select(r => r.Value).ToArray());
+
+            return new ChangeProcessor<TContext>(_serviceProvider.GetService<ILogger<ChangeProcessor<TContext>>>(), _serviceProvider.GetService<TContext>(), changeSetProcessorFactory);
+        }
+
+        class InternalChangeSetProcessorFactory : IChangeSetProcessorFactory<TContext>
+        {
+            IServiceProvider _serviceProvider;
+            Type[] _processorServiceTypes;
+
+            public InternalChangeSetProcessorFactory(IServiceProvider serviceProvider, Type[] processorServiceTypes)
+            {
+                _serviceProvider = serviceProvider;
+                _processorServiceTypes = processorServiceTypes;
+            }
+
+            public IEnumerable<IChangeSetProcessor<TEntity, TContext>> GetChangeSetProcessorsFor<TEntity>()
+            {
+                var entityProcessorTypes = _processorServiceTypes.Where(p => p.GenericTypeArguments[0] == typeof(TEntity) && p.GenericTypeArguments[1] == typeof(TContext));
+
+                var services = entityProcessorTypes.Select(t => (IChangeSetProcessor<TEntity, TContext>)_serviceProvider.GetService(t)).ToArray();
+
+                return services;
+            }
+        }
+    }
+
+    //public interface IChangeSetProcessorFactoryRegistry<TContext> where TContext : DbContext
+    //{
+    //    IChangeSetProcessorFactory<TContext> GetChangeSetProcessorFactory(string syncContext);
+    //    void SetChangeSetProcessorFactory(string syncContext, Type serviceType);
+    //}
+
+    //internal class ChangeSetProcessorFactoryRegistry<TContext> : IChangeSetProcessorFactoryRegistry<TContext> where TContext : DbContext
+    //{
+    //    IServiceProvider _serviceProvider;
+    //    Dictionary<string, Type> _registry = new Dictionary<string, Type>();
+
+    //    public ChangeSetProcessorFactoryRegistry(IServiceProvider serviceProvider)
+    //    {
+    //        _serviceProvider = serviceProvider;
+    //    }
+
+    //    public IChangeSetProcessorFactory<TContext> GetChangeSetProcessorFactory(string syncContext)
+    //    {
+    //        if (!_registry.TryGetValue(syncContext, out Type serviceType))
+    //            throw new Exception($"No Change Set Processor registered for DbContext: ${typeof(TContext).PrettyName()} and SyncContext: {syncContext}");
+
+
+
+    //        return null;
+    //    }
+
+    //    public void SetChangeSetProcessorFactory(string syncContext, Type serviceType)
+    //    {
+            
+    //    }
+
+    //    //class InternalChangeSetProcessorFactory : IChangeSetProcessorFactory<TContext>
+    //    //{
+    //    //    public IEnumerable<IChangeSetProcessor<TEntity, TContext>> GetChangeSetProcessorsFor<TEntity>()
+    //    //    {
+    //    //        return _serviceProvider.GetServices<IChangeSetProcessor<TEntity, TContext>>();
+    //    //    }
+    //    //}
+    //}
+
     public interface IChangeProcessor<TContext> where TContext : DbContext
     {
-        Task ProcessChangesForTable(IEntityType entityType);
+        Task ProcessChangesFor<TEntity>(Func<TContext, IEnumerable<ChangeTrackingEntry<TEntity>>> getChangesFunc, Func<ChangeSetProcessorContext<TContext>, ChangeTrackingEntry<TEntity>[], Task>? batchCompleteFunc = null);
     }
 
     public class ChangeProcessor<TContext> : IChangeProcessor<TContext> where TContext : DbContext
     {
-        readonly IServiceScopeFactory _serviceScopeFactory;
+        readonly TContext _dbContext;
+        readonly IChangeSetProcessorFactory<TContext> _changeSetProcessorFactory;
         readonly ILogger<ChangeProcessor<TContext>> _logger;
 
-        public ChangeProcessor(IServiceScopeFactory serviceScopeFactory, ILogger<ChangeProcessor<TContext>> logger)
+        public ChangeProcessor(ILogger<ChangeProcessor<TContext>> logger, TContext dbContext, IChangeSetProcessorFactory<TContext> changeSetProcessorFactory)
         {
-            _serviceScopeFactory = serviceScopeFactory;
             _logger = logger;
+            _dbContext = dbContext;
+            _changeSetProcessorFactory = changeSetProcessorFactory;
         }
 
         SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
 
-        public async Task ProcessChangesForTable(IEntityType entityType)
+        public async Task ProcessChangesFor<TEntity>(Func<TContext, IEnumerable<ChangeTrackingEntry<TEntity>>> getChangesFunc, Func<ChangeSetProcessorContext<TContext>, ChangeTrackingEntry<TEntity>[], Task>? batchCompleteFunc = null)
         {
-            try
+            var dbContext = _dbContext;
+
+            var entityType = dbContext.Model.FindEntityType(typeof(TEntity));
+
+            _logger.LogInformation("Processing changes for Table: {TableName}", entityType.GetFullTableName());
+
+            var changeSet = getChangesFunc(dbContext);
+
+            var batchPage = 0;
+
+            var batchSize = 10;
+
+            var changeSetBatch = changeSet.Skip(batchSize * batchPage).Take(batchSize).ToArray();
+
+            var processors = _changeSetProcessorFactory.GetChangeSetProcessorsFor<TEntity>();
+
+            if (!processors.Any())
             {
-                await  _semaphore.WaitAsync();
+                return;
+            }
 
-                _logger.LogInformation("Processing changes for Table: {TableName}", entityType.GetFullTableName());
+            while (changeSetBatch.Any())
+            {
+                using var processorContext = new ChangeSetProcessorContext<TContext>(dbContext);
 
-                using var serviceScope = _serviceScopeFactory.CreateScope();
-
-                var dbContext = serviceScope.ServiceProvider.GetRequiredService<TContext>();
-
-                var logContext = dbContext.GetLogContext();
-
-                using var logScope = _logger.BeginScope(logContext);
-
-                var changeSetProcessorFactory = serviceScope.ServiceProvider.GetService<IChangeSetProcessorFactory<TContext>>();
-
-                var syncContexts = entityType.GetSyncContexts();
-
-                var clrEntityType = entityType.ClrType;
-
-                foreach (var syncContext in syncContexts)
+                foreach (var changeSetProcessor in processors)
                 {
-                    var lastChangedVersion = await dbContext.GetLastChangedVersionFor(entityType, syncContext) ?? 0;
-
-                    var changeSet = getChangesFunc(entityType)(dbContext, lastChangedVersion, 3);
-                    
-                    _logger.LogInformation("Found {ChangeSetCount} change(s) for Table: {TableName} for SyncContext: {SyncContext} since version: {ChangeVersion}", changeSet.Count(), entityType.GetFullTableName(), syncContext, lastChangedVersion);
-
-                    if (!changeSet.Any())
-                        continue;
-
-                    //var it = clrEntityType.GetInterfaces().First();
-
-                    var changeSetProcessors = changeSetProcessorFactory.GetChangeSetProcessorsForEntity(clrEntityType, syncContext).ToArray();
-
-                    if(!changeSetProcessors.Any())
-                        return;
-
-                    using var processorContext = new ChangeSetProcessorContext<TContext>(dbContext);
-
-                    var newSet = changeSet.Select(c => convert(clrEntityType, clrEntityType, c));
-
-                    var ofTypeMethod = typeof(Enumerable).GetMethod(nameof(Enumerable.OfType)).MakeGenericMethod(typeof(ChangeTrackingEntry<>).MakeGenericType(clrEntityType));
-
-                    var res = ofTypeMethod.Invoke(null, new []{ newSet });
-
-                    foreach (var changeSetProcessor in changeSetProcessors)
+                    try
                     {
-                        var processorFunc = generateProcessorFunc(clrEntityType, changeSetProcessor);
-
-                        try
-                        {
-                            await processorFunc(changeSetProcessor, res, processorContext);
-                        }
-                        catch (Exception ex)
-                        {
-                            throw;
-                        }
+                        await changeSetProcessor.ProcessChanges(changeSetBatch, processorContext);
                     }
-
-                    if (processorContext.RecordCurrentVersion)
-                        await dbContext.SetLastChangedVersionFor(entityType, changeSet.Max(r => r.ChangeVersion ?? 0), syncContext);
+                    catch (Exception ex)
+                    {
+                        throw;
+                    }
                 }
+
+                if (batchCompleteFunc != null)
+                    await batchCompleteFunc.Invoke(processorContext, changeSetBatch);
                 
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error Processing Changes for Table: {TableName}", entityType.GetFullTableName());
-            }
-            finally
-            {
-                _semaphore.Release();
+                batchPage++;
+
+                changeSetBatch = changeSet.Skip(batchSize * batchPage).Take(batchSize).ToArray();
             }
         }
+
+        //public async Task ProcessChangesForTable(IEntityType entityType)
+        //{
+        //    try
+        //    {
+        //        await  _semaphore.WaitAsync();
+
+        //        using var serviceScope = _serviceScopeFactory.CreateScope();
+
+        //        var dbContext = serviceScope.ServiceProvider.GetRequiredService<TContext>();
+
+        //        var logContext = dbContext.GetLogContext();
+
+        //        using var logScope = _logger.BeginScope(logContext);
+
+        //        _logger.LogInformation("Processing changes for Table: {TableName}", entityType.GetFullTableName());
+
+        //        var changeSetProcessorFactory = serviceScope.ServiceProvider.GetService<IChangeSetProcessorFactory<TContext>>();
+
+        //        var syncContexts = entityType.GetSyncContexts();
+
+        //        var clrEntityType = entityType.ClrType;
+
+        //        foreach (var syncContext in syncContexts)
+        //        {
+        //            var lastChangedVersion = await dbContext.GetLastChangedVersionFor(entityType, syncContext) ?? 0;
+
+        //            var changeSet = getChangesFunc(entityType)(dbContext, lastChangedVersion, 3);
+                    
+        //            _logger.LogInformation("Found {ChangeSetCount} change(s) for Table: {TableName} for SyncContext: {SyncContext} since version: {ChangeVersion}", changeSet.Count(), entityType.GetFullTableName(), syncContext, lastChangedVersion);
+
+        //            if (!changeSet.Any())
+        //                continue;
+
+        //            //var it = clrEntityType.GetInterfaces().First();
+
+        //            var changeSetProcessors = changeSetProcessorFactory.GetChangeSetProcessorsForEntity(clrEntityType, syncContext).ToArray();
+
+        //            if(!changeSetProcessors.Any())
+        //                return;
+
+        //            using var processorContext = new ChangeSetProcessorContext<TContext>(dbContext);
+
+        //            var newSet = changeSet.Select(c => convert(clrEntityType, clrEntityType, c));
+
+        //            var ofTypeMethod = typeof(Enumerable).GetMethod(nameof(Enumerable.OfType)).MakeGenericMethod(typeof(ChangeTrackingEntry<>).MakeGenericType(clrEntityType));
+
+        //            var res = ofTypeMethod.Invoke(null, new []{ newSet });
+
+        //            foreach (var changeSetProcessor in changeSetProcessors)
+        //            {
+        //                var processorFunc = generateProcessorFunc(clrEntityType, changeSetProcessor);
+
+        //                try
+        //                {
+        //                    await processorFunc(changeSetProcessor, res, processorContext);
+        //                }
+        //                catch (Exception ex)
+        //                {
+        //                    throw;
+        //                }
+        //            }
+
+        //            if (processorContext.RecordCurrentVersion)
+        //                await dbContext.SetLastChangedVersionFor(entityType, changeSet.Max(r => r.ChangeVersion ?? 0), syncContext);
+        //        }
+                
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        _logger.LogError(ex, "Error Processing Changes for Table: {TableName}", entityType.GetFullTableName());
+        //    }
+        //    finally
+        //    {
+        //        _semaphore.Release();
+        //    }
+        //}
 
         ChangeTrackingEntry convert(Type interfaceType, Type concreteType, object entry)
         {

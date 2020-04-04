@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using EntityFrameworkCore.SqlChangeTracking.Models;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Extensions;
+using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Options;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils;
 using Microsoft.EntityFrameworkCore;
@@ -23,21 +24,17 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
     {
         readonly ILogger<SyncEngine<TContext>> _logger;
         readonly IServiceScopeFactory _serviceScopeFactory;
-        readonly ITableChangedNotificationDispatcher _tableChangedNotificationDispatcher;
-        readonly IChangeProcessor<TContext> _changeProcessor;
 
-        readonly List<SqlDependencyEx> _sqlTableDependencies = new List<SqlDependencyEx>();
-        Dictionary<string, IEntityType> _tableNameToEntityTypeMappings;
+        readonly IDatabaseChangeMonitor _databaseChangeMonitor;
 
-        static int _SqlDependencyIdentity = 0;
+        readonly List<IDisposable> _changeRegistrations = new List<IDisposable>();
 
         public SyncEngine(ILogger<SyncEngine<TContext>> logger, IServiceScopeFactory serviceScopeFactory,
-            ITableChangedNotificationDispatcher tableChangedNotificationDispatcher, IChangeProcessor<TContext> changeProcessor)
+            IDatabaseChangeMonitor databaseChangeMonitor)
         {
             _logger = logger;
             _serviceScopeFactory = serviceScopeFactory;
-            _tableChangedNotificationDispatcher = tableChangedNotificationDispatcher;
-            _changeProcessor = changeProcessor;
+            _databaseChangeMonitor = databaseChangeMonitor;
         }
 
         public async Task Start(SyncEngineOptions options, CancellationToken cancellationToken)
@@ -60,9 +57,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
                     return;
                 }
 
-                _tableNameToEntityTypeMappings = dbContext.Model.GetEntityTypes().ToDictionary(e => e.GetFullTableName(), e => e);
-
-                var syncEngineEntityTypes = dbContext.Model.GetEntityTypes().Where(EntityTypeExtensions.IsSyncEngineEnabled).ToList();
+                var syncEngineEntityTypes = dbContext.Model.GetEntityTypes().Where(e => e.IsSyncEngineEnabled()).ToList();
 
                 var databaseName = dbContext.Database.GetDbConnection().Database;
 
@@ -70,36 +65,32 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
                 serviceScope.Dispose();
 
-                if (options.SynchronizeChangesOnStartup)
-                {
-                    _logger.LogInformation("Synchronizing changes since last run...");
+                //if (options.SynchronizeChangesOnStartup)
+                //{
+                //    _logger.LogInformation("Synchronizing changes since last run...");
 
-                    var processChangesTasks = syncEngineEntityTypes.Select(e => _changeProcessor.ProcessChangesForTable(e)).ToArray();
+                //    var processChangesTasks = syncEngineEntityTypes.Select(e => _changeProcessor.ProcessChangesForTable(e)).ToArray();
 
-                    await Task.WhenAll(processChangesTasks);
-                }
+                //    await Task.WhenAll(processChangesTasks);
+                //}
 
-                if (options.CleanDatabaseOnStartup)
-                    SqlDependencyEx.CleanDatabase(connectionString, databaseName);
 
                 _logger.LogInformation("Found {EntityTrackingCount} Entities with Sync Engine enabled", syncEngineEntityTypes.Count);
 
                 foreach (var entityType in syncEngineEntityTypes)
                 {
-                    Interlocked.Increment(ref _SqlDependencyIdentity);
+                    var changeRegistration = _databaseChangeMonitor.RegisterForChanges(o =>
+                    {
+                        o.TableName = entityType.GetTableName();
+                        o.SchemaName = entityType.GetActualSchema();
+                        o.DatabaseName = databaseName;
+                        o.ConnectionString = connectionString;
+                    });
 
-                    var sqlTableDependency = new SqlDependencyEx(connectionString, databaseName, entityType.GetTableName(), entityType.GetActualSchema(), identity: _SqlDependencyIdentity, receiveDetails: false);
-
-                    _logger.LogDebug("Created SqlDependency on table {TableName} with identity: {SqlDependencyId}", entityType.GetFullTableName(), _SqlDependencyIdentity);
-
-                    sqlTableDependency.TableChanged += async (object sender, SqlDependencyEx.TableChangedEventArgs e) => await ProcessChangeEvent(sender, e);
-
-                    _sqlTableDependencies.Add(sqlTableDependency);
+                    _changeRegistrations.Add(changeRegistration);
 
                     _logger.LogInformation("Sync Engine configured for Entity: {EntityTypeName} on Table: {TableName}", entityType.Name, entityType.GetFullTableName());
                 }
-
-                _sqlTableDependencies.ForEach(s => s.Start());
             }
             catch (Exception ex)
             {
@@ -110,32 +101,9 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
             }
         }
 
-        async Task ProcessChangeEvent(object sender, SqlDependencyEx.TableChangedEventArgs e)
-        {
-            string? tableName = null;
-
-            try
-            {
-                tableName = $"{((SqlDependencyEx)sender).SchemaName}.{((SqlDependencyEx)sender).TableName}" ;
-                
-                _logger.LogInformation("Change detected in table: {tableName} ", tableName);
-
-                await _tableChangedNotificationDispatcher.Dispatch(new TableChangedNotification(typeof(TContext), _tableNameToEntityTypeMappings[tableName], e.NotificationType.ToChangeOperation()), new CancellationToken());
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error processing Change Event for Table: {tableName}", tableName);
-            }
-        }
-
         public async Task Stop(CancellationToken cancellationToken)
         {
-            _sqlTableDependencies.ForEach(s => s.Dispose());
-        }
-
-        public void Dispose()
-        {
-            //Stop().Wait();
+            _changeRegistrations.ForEach(r => r.Dispose());
         }
     }
 }

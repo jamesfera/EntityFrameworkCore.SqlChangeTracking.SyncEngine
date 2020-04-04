@@ -22,12 +22,12 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Extensions
             return entry?.LastSyncedVersion;
         }
 
-        //public static Task<long?> GetLastChangedVersionFor<T>(this DbContext db)
-        //{
-        //    var entityType = db.Model.FindEntityType(typeof(T));
+        public static Task<long?> GetLastChangedVersionFor<T>(this DbContext db, string syncContext)
+        {
+            var entityType = db.Model.FindEntityType(typeof(T));
 
-        //    return GetLastChangedVersionFor(db, entityType);
-        //}
+            return db.GetLastChangedVersionFor(entityType, syncContext);
+        }
 
         public static async Task SetLastChangedVersionFor(this DbContext db, IEntityType entityType, long version, string syncContext)
         {
