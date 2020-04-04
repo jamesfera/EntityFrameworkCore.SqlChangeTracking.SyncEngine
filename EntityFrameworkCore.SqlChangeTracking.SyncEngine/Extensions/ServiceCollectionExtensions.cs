@@ -30,6 +30,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
             //services.AddSingleton<ITableChangedNotificationDispatcher, TableChangedNotificationDispatcher>();
 
             services.TryAddSingleton<IDatabaseChangeMonitor, DatabaseChangeMonitor>();
+            services.TryAddScoped<IChangeStuff<TContext>, ChangeStuff<TContext>>();
 
             //services.AddTransient<ITableChangedNotificationHandler, ChangeProcessorNotificationHandler>();
 

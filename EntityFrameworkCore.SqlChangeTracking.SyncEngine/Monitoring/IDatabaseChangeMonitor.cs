@@ -14,7 +14,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
 {
     public interface IDatabaseChangeMonitor : IDisposable
     {
-        IDisposable RegisterForChanges(Action<DatabaseChangeMonitorRegistrationOptions> optionsBuilder);
+        IDisposable RegisterForChanges(Action<DatabaseChangeMonitorRegistrationOptions> optionsBuilder, Func<ITableChangedNotification, Task> changeEventHandler);
     }
 
     public class DatabaseChangeMonitor : IDatabaseChangeMonitor
@@ -37,7 +37,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
             //    SqlDependencyEx.CleanDatabase(connectionString, databaseName);
         }
 
-        public IDisposable RegisterForChanges(Action<DatabaseChangeMonitorRegistrationOptions> optionsBuilder)
+        public IDisposable RegisterForChanges(Action<DatabaseChangeMonitorRegistrationOptions> optionsBuilder, Func<ITableChangedNotification, Task> changeEventHandler)
         {
             var options = new DatabaseChangeMonitorRegistrationOptions();
 
@@ -45,9 +45,9 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
 
             var registrationKey = $"{options.DatabaseName}.{options.SchemaName}.{options.TableName}";
 
-            var t = new ChangeRegistration(registrationKey, _registeredChangeActions, () => Task.CompletedTask);
+            var registration = new ChangeRegistration(registrationKey, _registeredChangeActions, changeEventHandler);
 
-            _registeredChangeActions.AddOrUpdate(registrationKey, new List<ChangeRegistration>(new[] {t}).ToImmutableList(), (k, r) => r.Add(t));
+            _registeredChangeActions.AddOrUpdate(registrationKey, new List<ChangeRegistration>(new[] { registration }).ToImmutableList(), (k, r) => r.Add(registration));
 
             _sqlDependencies.GetOrAdd(registrationKey, k =>
             {
@@ -66,7 +66,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
                 return sqlTableDependency;
             });
 
-            return t;
+            return registration;
         }
 
         async Task TableChangedEventHandler(object sender, SqlDependencyEx.TableChangedEventArgs e)
@@ -79,7 +79,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
 
                 tableName = $"{sqlEx.SchemaName}.{sqlEx.TableName}";
 
-                _logger.LogInformation("Change detected in table: {tableName} ", tableName);
+                _logger.LogInformation("Change detected in table: {TableName} ", tableName);
 
                 var registrationKey = $"{sqlEx.DatabaseName}.{sqlEx.SchemaName}.{sqlEx.TableName}";
 
@@ -87,14 +87,17 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
                 {
                     await _semaphore.WaitAsync();
                     
-                    var tasks = actions.Select(async a => {
+                    var tasks = actions.Select(async a =>
+                    {
+                        var notification = new TableChangedNotification(sqlEx.DatabaseName, sqlEx.TableName, sqlEx.SchemaName, e.NotificationType.ToChangeOperation());
+
                         try
                         {
-                            await a.ChangeFunc();
+                            await a.ChangeFunc(notification);
                         }
                         catch (Exception ex)
                         {
-                            _logger.LogError(ex, "Error handling notification: {tableChangedNotification} Handler: {notificationHandler}");
+                            _logger.LogError(ex, "Error handling notification: {TableChangedNotification} Handler: {NotificationHandler}", notification, a.GetType().PrettyName());
                         }
                     });
 
@@ -129,9 +132,9 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
             ConcurrentDictionary<string, ImmutableList<ChangeRegistration>> _registeredChangeActions;
             string _registrationKey;
 
-            public Func<Task> ChangeFunc { get; }
+            public Func<ITableChangedNotification, Task> ChangeFunc { get; }
 
-            public ChangeRegistration(string registrationKey, ConcurrentDictionary<string, ImmutableList<ChangeRegistration>> registeredChangeActions, Func<Task> changeFunc)
+            public ChangeRegistration(string registrationKey, ConcurrentDictionary<string, ImmutableList<ChangeRegistration>> registeredChangeActions, Func<ITableChangedNotification, Task> changeFunc)
             {
                 _registrationKey = registrationKey;
                 _registeredChangeActions = registeredChangeActions;

@@ -2,19 +2,11 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
-using System.Linq.Expressions;
-using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
-using EntityFrameworkCore.SqlChangeTracking.Models;
-using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Extensions;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Options;
-using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Metadata;
-using Microsoft.EntityFrameworkCore.Metadata.Internal;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -65,27 +57,41 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
                 serviceScope.Dispose();
 
-                //if (options.SynchronizeChangesOnStartup)
-                //{
-                //    _logger.LogInformation("Synchronizing changes since last run...");
+                if (options.SynchronizeChangesOnStartup)
+                {
+                    _logger.LogInformation("Synchronizing changes since last run...");
 
-                //    var processChangesTasks = syncEngineEntityTypes.Select(e => _changeProcessor.ProcessChangesForTable(e)).ToArray();
+                    var processChangesTasks = syncEngineEntityTypes.Select(async e =>
+                    {
+                        using var scope = _serviceScopeFactory.CreateScope();
 
-                //    await Task.WhenAll(processChangesTasks);
-                //}
+                        var changeStuff = scope.ServiceProvider.GetRequiredService<IChangeStuff<TContext>>();
 
+                        await changeStuff.GetChangeSetProcessorsForEntity(e, options.SyncContext);
+                    }).ToArray();
+
+                    await Task.WhenAll(processChangesTasks);
+                }
 
                 _logger.LogInformation("Found {EntityTrackingCount} Entities with Sync Engine enabled", syncEngineEntityTypes.Count);
 
                 foreach (var entityType in syncEngineEntityTypes)
                 {
                     var changeRegistration = _databaseChangeMonitor.RegisterForChanges(o =>
-                    {
-                        o.TableName = entityType.GetTableName();
-                        o.SchemaName = entityType.GetActualSchema();
-                        o.DatabaseName = databaseName;
-                        o.ConnectionString = connectionString;
-                    });
+                        {
+                            o.TableName = entityType.GetTableName();
+                            o.SchemaName = entityType.GetActualSchema();
+                            o.DatabaseName = databaseName;
+                            o.ConnectionString = connectionString;
+                        },
+                        async t =>
+                        {
+                            using var scope = _serviceScopeFactory.CreateScope();
+
+                            var changeStuff = scope.ServiceProvider.GetRequiredService<IChangeStuff<TContext>>();
+
+                            await changeStuff.GetChangeSetProcessorsForEntity(entityType, options.SyncContext);
+                        });
 
                     _changeRegistrations.Add(changeRegistration);
 
@@ -101,9 +107,11 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
             }
         }
 
-        public async Task Stop(CancellationToken cancellationToken)
+        public Task Stop(CancellationToken cancellationToken)
         {
             _changeRegistrations.ForEach(r => r.Dispose());
+
+            return Task.CompletedTask;
         }
     }
 }

@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using EntityFrameworkCore.SqlChangeTracking.AsyncLinqExtensions;
 using EntityFrameworkCore.SqlChangeTracking.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
@@ -38,17 +39,20 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
     internal class ChangeProcessorFactory<TContext> : IChangeProcessorFactory<TContext> where TContext : DbContext
     {
         IServiceProvider _serviceProvider;
-        KeyValuePair<string, Type>[] _registrations;
+        Dictionary<string, Type[]> _registrations;
 
         public ChangeProcessorFactory(IServiceProvider serviceProvider, IEnumerable<IChangeSetProcessorRegistration> registrations)
         {
             _serviceProvider = serviceProvider;
-            _registrations = registrations.Select(r => r.Registration).ToArray();
+            _registrations = registrations.Select(r => r.Registration).GroupBy(r => r.Key, r => r.Value).ToDictionary(g=>g.Key, g => g.ToArray());
         }
 
         public IChangeProcessor<TContext> GetChangeProcessor(string syncContext)
         {
-            var changeSetProcessorFactory = new InternalChangeSetProcessorFactory(_serviceProvider, _registrations.Where(r => r.Key == syncContext).Select(r => r.Value).ToArray());
+            if (!_registrations.TryGetValue(syncContext, out Type[] serviceTypes))
+                ;
+
+            var changeSetProcessorFactory = new InternalChangeSetProcessorFactory(_serviceProvider, serviceTypes);
 
             return new ChangeProcessor<TContext>(_serviceProvider.GetService<ILogger<ChangeProcessor<TContext>>>(), _serviceProvider.GetService<TContext>(), changeSetProcessorFactory);
         }
@@ -117,7 +121,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
     public interface IChangeProcessor<TContext> where TContext : DbContext
     {
-        Task ProcessChangesFor<TEntity>(Func<TContext, IEnumerable<ChangeTrackingEntry<TEntity>>> getChangesFunc, Func<ChangeSetProcessorContext<TContext>, ChangeTrackingEntry<TEntity>[], Task>? batchCompleteFunc = null);
+        Task ProcessChangesFor<TEntity>(Func<TContext, IAsyncEnumerable<ChangeTrackingEntry<TEntity>>> getChangesFunc, Func<ChangeSetProcessorContext<TContext>, ChangeTrackingEntry<TEntity>[], Task>? batchCompleteFunc = null);
     }
 
     public class ChangeProcessor<TContext> : IChangeProcessor<TContext> where TContext : DbContext
@@ -135,7 +139,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
         SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
 
-        public async Task ProcessChangesFor<TEntity>(Func<TContext, IEnumerable<ChangeTrackingEntry<TEntity>>> getChangesFunc, Func<ChangeSetProcessorContext<TContext>, ChangeTrackingEntry<TEntity>[], Task>? batchCompleteFunc = null)
+        public async Task ProcessChangesFor<TEntity>(Func<TContext, IAsyncEnumerable<ChangeTrackingEntry<TEntity>>> getChangesFunc, Func<ChangeSetProcessorContext<TContext>, ChangeTrackingEntry<TEntity>[], Task>? batchCompleteFunc = null)
         {
             var dbContext = _dbContext;
 
@@ -149,7 +153,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
             var batchSize = 10;
 
-            var changeSetBatch = changeSet.Skip(batchSize * batchPage).Take(batchSize).ToArray();
+            var changeSetBatch = await changeSet.Skip(batchSize * batchPage).Take(batchSize).ToArrayAsync();
 
             var processors = _changeSetProcessorFactory.GetChangeSetProcessorsFor<TEntity>();
 
@@ -179,7 +183,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
                 
                 batchPage++;
 
-                changeSetBatch = changeSet.Skip(batchSize * batchPage).Take(batchSize).ToArray();
+                changeSetBatch = await changeSet.Skip(batchSize * batchPage).Take(batchSize).ToArrayAsync();
             }
         }
 
@@ -273,30 +277,30 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
             return lambda.DynamicInvoke(entry) as ChangeTrackingEntry;
         }
 
-        Func<TContext, long, int, IEnumerable<ChangeTrackingEntry>> getChangesFunc(IEntityType entityType)
-        {
-            var getChangesMethodInfo = typeof(Extensions.DbSetExtensions).GetMethod(nameof(Extensions.DbSetExtensions
-                .GetChangesSinceVersion), BindingFlags.NonPublic | BindingFlags.Static).MakeGenericMethod(entityType.ClrType);
+        //Func<TContext, long, int, IEnumerable<ChangeTrackingEntry>> getChangesFunc(IEntityType entityType)
+        //{
+        //    var getChangesMethodInfo = typeof(Extensions.DbSetExtensions).GetMethod(nameof(Extensions.DbSetExtensions
+        //        .GetChangesSinceVersion), BindingFlags.NonPublic | BindingFlags.Static).MakeGenericMethod(entityType.ClrType);
 
-            var dbSetType = typeof(DbSet<>).MakeGenericType(entityType.ClrType);
+        //    var dbSetType = typeof(DbSet<>).MakeGenericType(entityType.ClrType);
 
-            var dbSetPropertyInfo = typeof(TContext).GetProperties().FirstOrDefault(p => p.PropertyType == dbSetType);
+        //    var dbSetPropertyInfo = typeof(TContext).GetProperties().FirstOrDefault(p => p.PropertyType == dbSetType);
 
-            if (dbSetPropertyInfo == null)
-                throw new Exception($"No Property of type {dbSetType.PrettyName()} found on {typeof(TContext).Name}");
+        //    if (dbSetPropertyInfo == null)
+        //        throw new Exception($"No Property of type {dbSetType.PrettyName()} found on {typeof(TContext).Name}");
 
-            var dbContextParameterExpression = Expression.Parameter(typeof(TContext), "dbContext");
-            var dbSetPropertyExpression = Expression.Property(dbContextParameterExpression, dbSetPropertyInfo);
+        //    var dbContextParameterExpression = Expression.Parameter(typeof(TContext), "dbContext");
+        //    var dbSetPropertyExpression = Expression.Property(dbContextParameterExpression, dbSetPropertyInfo);
 
-            var versionParameter = Expression.Parameter(typeof(long), "version");
-            var maxResultsParameter = Expression.Parameter(typeof(int), "maxResults");
+        //    var versionParameter = Expression.Parameter(typeof(long), "version");
+        //    var maxResultsParameter = Expression.Parameter(typeof(int), "maxResults");
             
-            var getChangesCallExpression = Expression.Call(getChangesMethodInfo, dbSetPropertyExpression, versionParameter, maxResultsParameter);
+        //    var getChangesCallExpression = Expression.Call(getChangesMethodInfo, dbSetPropertyExpression, versionParameter, maxResultsParameter);
 
-            var lambda = Expression.Lambda<Func<TContext, long, int, IEnumerable<ChangeTrackingEntry>>>(getChangesCallExpression, dbContextParameterExpression, versionParameter, maxResultsParameter);
+        //    var lambda = Expression.Lambda<Func<TContext, long, int, IEnumerable<ChangeTrackingEntry>>>(getChangesCallExpression, dbContextParameterExpression, versionParameter, maxResultsParameter);
 
-            return lambda.Compile();
-        }
+        //    return lambda.Compile();
+        //}
         Func<object, object, ChangeSetProcessorContext<TContext>, Task> generateProcessorFunc(Type entityType, object processor)
         {
             Type processorType = processor.GetType();

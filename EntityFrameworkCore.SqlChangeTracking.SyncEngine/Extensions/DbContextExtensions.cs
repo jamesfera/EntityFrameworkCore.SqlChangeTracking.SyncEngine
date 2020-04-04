@@ -1,13 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Data.Common;
-using System.Linq;
-using System.Text;
 using System.Threading.Tasks;
+using EntityFrameworkCore.SqlChangeTracking.Extensions;
+using EntityFrameworkCore.SqlChangeTracking.Models;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
-using Microsoft.EntityFrameworkCore.Storage;
 
 namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Extensions
 {
@@ -29,16 +28,25 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Extensions
             return db.GetLastChangedVersionFor(entityType, syncContext);
         }
 
+        public static IAsyncEnumerable<ChangeTrackingEntry<T>> GetChangesSinceLastVersion<T>(this DbContext db, IEntityType entityType, string syncContext) where T : class, new()
+        {
+            var lastVersion = db.GetLastChangedVersionFor(entityType, syncContext).Result ?? 0;
+
+            return db.GetChangesSinceVersion<T>(entityType, lastVersion);
+        }
+
         public static async Task SetLastChangedVersionFor(this DbContext db, IEntityType entityType, long version, string syncContext)
         {
-            //await using var innerContext = new ContextForQueryType<LastSyncedChangeVersion>(db.Database.GetDbConnection(), m => m.Entity<LastSyncedChangeVersion>());
+            //await using var innerContext = new ContextForQueryType<LastSyncedChangeVersion>(db.Database.GetDbConnection(), m => m.ApplyConfiguration(new LastSyncedChangeVersion()));
 
-            //innerContext.Set<LastSyncedChangeVersion>().Update(new LastSyncedChangeVersion(entityType.GetTableName(), version));
+            //innerContext.Set<LastSyncedChangeVersion>().Update(new LastSyncedChangeVersion()
+            //{
+            //    TableName = entityType.GetFullTableName(),
+            //    SyncContext = syncContext,
+            //    LastSyncedVersion = version
+            //});
 
-            
-            
-
-            //await innerContext.Database.UseTransactionAsync(db.Database.CurrentTransaction.GetDbTransaction());
+            ////await innerContext.Database.UseTransactionAsync(db.Database.CurrentTransaction.GetDbTransaction());
 
             //await innerContext.SaveChangesAsync(false);
 
