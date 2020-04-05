@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Options;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -31,6 +32,10 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
         public async Task Start(SyncEngineOptions options, CancellationToken cancellationToken)
         {
+
+            if (string.IsNullOrEmpty(options.SyncContext))
+                throw new Exception("");
+
             try
             {
                 using var serviceScope = _serviceScopeFactory.CreateScope();
@@ -61,14 +66,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
                 {
                     _logger.LogInformation("Synchronizing changes since last run...");
 
-                    var processChangesTasks = syncEngineEntityTypes.Select(async e =>
-                    {
-                        using var scope = _serviceScopeFactory.CreateScope();
-
-                        var changeStuff = scope.ServiceProvider.GetRequiredService<IChangeStuff<TContext>>();
-
-                        await changeStuff.GetChangeSetProcessorsForEntity(e, options.SyncContext);
-                    }).ToArray();
+                    var processChangesTasks = syncEngineEntityTypes.Select(e => processChanges(e, options.SyncContext)).ToArray();
 
                     await Task.WhenAll(processChangesTasks);
                 }
@@ -84,14 +82,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
                             o.DatabaseName = databaseName;
                             o.ConnectionString = connectionString;
                         },
-                        async t =>
-                        {
-                            using var scope = _serviceScopeFactory.CreateScope();
-
-                            var changeStuff = scope.ServiceProvider.GetRequiredService<IChangeStuff<TContext>>();
-
-                            await changeStuff.GetChangeSetProcessorsForEntity(entityType, options.SyncContext);
-                        });
+                        t => processChanges(entityType, options.SyncContext));
 
                     _changeRegistrations.Add(changeRegistration);
 
@@ -105,6 +96,19 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
                 if (options.ThrowOnStartupException)
                     throw;
             }
+        }
+
+        async Task processChanges(IEntityType entityType, string syncContext)
+        {
+            using var scope = _serviceScopeFactory.CreateScope();
+
+            var dbContext = scope.ServiceProvider.GetService<TContext>();
+
+            using var logScope = _logger.BeginScope(dbContext.GetLogContext());
+
+            var changeStuff = scope.ServiceProvider.GetRequiredService<IChangeStuff<TContext>>();
+
+            await changeStuff.GetChangeSetProcessorsForEntity(entityType, syncContext);
         }
 
         public Task Stop(CancellationToken cancellationToken)

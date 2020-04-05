@@ -12,12 +12,12 @@ using Microsoft.Extensions.Logging;
 
 namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
 {
-    public interface IDatabaseChangeMonitor : IDisposable
+    public interface IDatabaseChangeMonitor
     {
         IDisposable RegisterForChanges(Action<DatabaseChangeMonitorRegistrationOptions> optionsBuilder, Func<ITableChangedNotification, Task> changeEventHandler);
     }
 
-    public class DatabaseChangeMonitor : IDatabaseChangeMonitor
+    public class DatabaseChangeMonitor : IDatabaseChangeMonitor, IDisposable
     {
         ILogger<DatabaseChangeMonitor> _logger;
 

@@ -79,46 +79,6 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
         }
     }
 
-    //public interface IChangeSetProcessorFactoryRegistry<TContext> where TContext : DbContext
-    //{
-    //    IChangeSetProcessorFactory<TContext> GetChangeSetProcessorFactory(string syncContext);
-    //    void SetChangeSetProcessorFactory(string syncContext, Type serviceType);
-    //}
-
-    //internal class ChangeSetProcessorFactoryRegistry<TContext> : IChangeSetProcessorFactoryRegistry<TContext> where TContext : DbContext
-    //{
-    //    IServiceProvider _serviceProvider;
-    //    Dictionary<string, Type> _registry = new Dictionary<string, Type>();
-
-    //    public ChangeSetProcessorFactoryRegistry(IServiceProvider serviceProvider)
-    //    {
-    //        _serviceProvider = serviceProvider;
-    //    }
-
-    //    public IChangeSetProcessorFactory<TContext> GetChangeSetProcessorFactory(string syncContext)
-    //    {
-    //        if (!_registry.TryGetValue(syncContext, out Type serviceType))
-    //            throw new Exception($"No Change Set Processor registered for DbContext: ${typeof(TContext).PrettyName()} and SyncContext: {syncContext}");
-
-
-
-    //        return null;
-    //    }
-
-    //    public void SetChangeSetProcessorFactory(string syncContext, Type serviceType)
-    //    {
-            
-    //    }
-
-    //    //class InternalChangeSetProcessorFactory : IChangeSetProcessorFactory<TContext>
-    //    //{
-    //    //    public IEnumerable<IChangeSetProcessor<TEntity, TContext>> GetChangeSetProcessorsFor<TEntity>()
-    //    //    {
-    //    //        return _serviceProvider.GetServices<IChangeSetProcessor<TEntity, TContext>>();
-    //    //    }
-    //    //}
-    //}
-
     public interface IChangeProcessor<TContext> where TContext : DbContext
     {
         Task ProcessChangesFor<TEntity>(Func<TContext, IAsyncEnumerable<ChangeTrackingEntry<TEntity>>> getChangesFunc, Func<ChangeSetProcessorContext<TContext>, ChangeTrackingEntry<TEntity>[], Task>? batchCompleteFunc = null);
