@@ -34,7 +34,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
 
 
             //if (options.CleanDatabaseOnStartup)
-            //    SqlDependencyEx.CleanDatabase(connectionString, databaseName);
+            //SqlDependencyEx.CleanDatabase(connectionString, databaseName);
         }
 
         public IDisposable RegisterForChanges(Action<DatabaseChangeMonitorRegistrationOptions> optionsBuilder, Func<ITableChangedNotification, Task> changeEventHandler)
@@ -51,15 +51,17 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
 
             _sqlDependencies.GetOrAdd(registrationKey, k =>
             {
-                Interlocked.Increment(ref SqlDependencyIdentity);
+                var id = Interlocked.Increment(ref SqlDependencyIdentity);
 
                 var fullTableName = $"{options.SchemaName}.{options.TableName}";
 
                 var sqlTableDependency = new SqlDependencyEx(options.ConnectionString, options.DatabaseName, options.TableName, options.SchemaName, identity: SqlDependencyIdentity, receiveDetails: false);
 
-                _logger.LogDebug("Created SqlDependency on table {TableName} with identity: {SqlDependencyId}", fullTableName, SqlDependencyIdentity);
+                _logger.LogInformation("Created Change Event Listener on table {TableName} with identity: {SqlDependencyId}", fullTableName, id);
 
                 sqlTableDependency.TableChanged += async (sender, e) => await TableChangedEventHandler(sender, e);
+
+                sqlTableDependency.NotificationProcessStopped += (sender, args) => _logger.LogInformation("Terminated: Change Event Listener on table {TableName} with identity: {SqlDependencyId}", fullTableName, id);
 
                 sqlTableDependency.Start();
 
@@ -72,6 +74,10 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
         async Task TableChangedEventHandler(object sender, SqlDependencyEx.TableChangedEventArgs e)
         {
             string? tableName = null;
+
+            //BlockingCollection<ITableChangedNotification> notificationQueue = new BlockingCollection<ITableChangedNotification>();
+
+            //notificationQueue.
 
             try
             {
