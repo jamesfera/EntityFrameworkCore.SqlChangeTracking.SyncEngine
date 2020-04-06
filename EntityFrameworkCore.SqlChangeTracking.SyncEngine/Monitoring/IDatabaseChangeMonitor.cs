@@ -85,7 +85,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
 
                 if (_registeredChangeActions.TryGetValue(registrationKey, out ImmutableList<ChangeRegistration> actions))
                 {
-                    await _semaphore.WaitAsync();
+                    //await _semaphore.WaitAsync();
                     
                     var tasks = actions.Select(async a =>
                     {
@@ -107,7 +107,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
                     }
                     finally
                     {
-                        _semaphore.Release();
+                        //_semaphore.Release();
                     }
                 }
                 else //this should never happen
