@@ -67,7 +67,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
                     _logger.LogInformation("Synchronizing changes since last run...");
 
                     var processChangesTasks = syncEngineEntityTypes.Select(e => processChanges(e, options.SyncContext)).ToArray();
-
+                    
                     await Task.WhenAll(processChangesTasks);
                 }
 
@@ -100,15 +100,22 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
         async Task processChanges(IEntityType entityType, string syncContext)
         {
-            using var scope = _serviceScopeFactory.CreateScope();
+            try
+            {
+                using var scope = _serviceScopeFactory.CreateScope();
 
-            var dbContext = scope.ServiceProvider.GetService<TContext>();
+                var dbContext = scope.ServiceProvider.GetService<TContext>();
 
-            using var logScope = _logger.BeginScope(dbContext.GetLogContext());
+                using var logScope = _logger.BeginScope(dbContext.GetLogContext());
 
-            var changeStuff = scope.ServiceProvider.GetRequiredService<IChangeStuff<TContext>>();
+                var changeStuff = scope.ServiceProvider.GetRequiredService<IChangeStuff<TContext>>();
 
-            await changeStuff.GetChangeSetProcessorsForEntity(entityType, syncContext);
+                await changeStuff.GetChangeSetProcessorsForEntity(entityType, syncContext);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing Changes for table: {TableName}", entityType.GetFullTableName());
+            }
         }
 
         public Task Stop(CancellationToken cancellationToken)

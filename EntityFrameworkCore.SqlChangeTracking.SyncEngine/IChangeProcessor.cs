@@ -97,8 +97,6 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
             _changeSetProcessorFactory = changeSetProcessorFactory;
         }
 
-        SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
-
         public async Task ProcessChangesFor<TEntity>(Func<TContext, IAsyncEnumerable<ChangeTrackingEntry<TEntity>>> getChangesFunc, Func<ChangeSetProcessorContext<TContext>, ChangeTrackingEntry<TEntity>[], Task>? batchCompleteFunc = null)
         {
             var dbContext = _dbContext;
