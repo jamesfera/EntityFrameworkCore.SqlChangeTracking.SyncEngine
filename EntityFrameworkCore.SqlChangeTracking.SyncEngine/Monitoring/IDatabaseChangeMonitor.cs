@@ -20,6 +20,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
     public class DatabaseChangeMonitor : IDatabaseChangeMonitor, IDisposable
     {
         ILogger<DatabaseChangeMonitor> _logger;
+        ILoggerFactory _loggerFactory;
 
         static int SqlDependencyIdentity = 0;
 
@@ -28,13 +29,35 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
 
         SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
 
-        public DatabaseChangeMonitor(ILogger<DatabaseChangeMonitor> logger)
+        CancellationTokenSource _cancellationTokenSource = new CancellationTokenSource();
+
+        ImmutableList<Task> _notificationTasks = ImmutableList<Task>.Empty;
+
+        public DatabaseChangeMonitor(ILogger<DatabaseChangeMonitor> logger, ILoggerFactory loggerFactory)
         {
             _logger = logger;
+            _loggerFactory = loggerFactory;
 
 
             //if (options.CleanDatabaseOnStartup)
             //SqlDependencyEx.CleanDatabase(connectionString, databaseName);
+
+            //_runThread = Task.Run(async () =>
+            //{
+            //    while (!_cancellationTokenSource.IsCancellationRequested)
+            //    {
+            //        if (_notificationTasks.Count == 0)
+            //            await Task.Delay(500);
+            //        else
+            //        {
+            //            var task = await Task.WhenAny(_notificationTasks.ToArray());
+
+            //            await task;
+            //            int j = 0;
+            //        }
+            //        //_logger.LogInformation("Task pulsed");
+            //    }
+            //});
         }
 
         public IDisposable RegisterForChanges(Action<DatabaseChangeMonitorRegistrationOptions> optionsBuilder, Func<ITableChangedNotification, Task> changeEventHandler)
@@ -55,15 +78,19 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
 
                 var fullTableName = $"{options.SchemaName}.{options.TableName}";
 
-                var sqlTableDependency = new SqlDependencyEx(options.ConnectionString, options.DatabaseName, options.TableName, options.SchemaName, identity: SqlDependencyIdentity, receiveDetails: false);
+                var sqlTableDependency = new SqlDependencyEx(_loggerFactory.CreateLogger<SqlDependencyEx>(), options.ConnectionString, options.DatabaseName, options.TableName, options.SchemaName, identity: SqlDependencyIdentity, receiveDetails: true);
+                
+                var notificationTask = sqlTableDependency.Start(TableChangedEventHandler, (sqlEx, ex) =>
+                {
+                    if(ex == null)
+                        _logger.LogInformation("Table change listener terminated for table: {TableName} database: {DatabaseName}", fullTableName, options.DatabaseName);
+                    else
+                        _logger.LogError(ex, "Table change listener terminated for table: {TableName} database: {DatabaseName}", fullTableName, options.DatabaseName);
+                }, _cancellationTokenSource.Token);
 
                 _logger.LogInformation("Created Change Event Listener on table {TableName} with identity: {SqlDependencyId}", fullTableName, id);
 
-                sqlTableDependency.TableChanged += async (sender, e) => await TableChangedEventHandler(sender, e);
-
-                sqlTableDependency.NotificationProcessStopped += (sender, args) => _logger.LogInformation("Terminated: Change Event Listener on table {TableName} with identity: {SqlDependencyId}", fullTableName, id);
-
-                sqlTableDependency.Start();
+                _notificationTasks = _notificationTasks.Add(notificationTask);
 
                 return sqlTableDependency;
             });
@@ -71,18 +98,14 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
             return registration;
         }
 
-        async Task TableChangedEventHandler(object sender, SqlDependencyEx.TableChangedEventArgs e)
+        Task _runThread;
+
+        async Task TableChangedEventHandler(SqlDependencyEx sqlEx, SqlDependencyEx.TableChangedEventArgs e)
         {
             string? tableName = null;
 
-            //BlockingCollection<ITableChangedNotification> notificationQueue = new BlockingCollection<ITableChangedNotification>();
-
-            //notificationQueue.
-
             try
             {
-                var sqlEx = (SqlDependencyEx) sender;
-
                 tableName = $"{sqlEx.SchemaName}.{sqlEx.TableName}";
 
                 _logger.LogInformation("Change detected in table: {TableName} ", tableName);
@@ -129,8 +152,14 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
 
         public void Dispose()
         {
-            _sqlDependencies?.Values.ToList().ForEach(d => d.Dispose());
+            _cancellationTokenSource.Cancel();
+
+            _sqlDependencies?.Values.ToList().ForEach(d => d.Stop(_cancellationTokenSource.Token));
             _sqlDependencies?.Clear();
+
+            //_notificationTasks.ForEach(t => t.Dispose());
+
+            _cancellationTokenSource.Dispose();
         }
 
         class ChangeRegistration : IDisposable

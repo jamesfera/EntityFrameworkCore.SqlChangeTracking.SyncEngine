@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Extensions;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Options;
 using Microsoft.EntityFrameworkCore;
@@ -32,7 +33,6 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
         public async Task Start(SyncEngineOptions options, CancellationToken cancellationToken)
         {
-
             if (string.IsNullOrEmpty(options.SyncContext))
                 throw new Exception("");
 
@@ -60,6 +60,13 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
                 var connectionString = dbContext.Database.GetDbConnection().ConnectionString;
 
+                foreach (var syncEngineEntityType in syncEngineEntityTypes)
+                {
+                    await dbContext.InitializeSyncEngine(syncEngineEntityType, options.SyncContext);
+                }
+
+                //syncEngineEntityTypes.ForEach(async e => await dbContext.InitializeSyncEngine(e, options.SyncContext));
+
                 serviceScope.Dispose();
 
                 if (options.SynchronizeChangesOnStartup)
@@ -67,13 +74,13 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
                     _logger.LogInformation("Synchronizing changes since last run...");
 
                     var processChangesTasks = syncEngineEntityTypes.Select(e => processChanges(e, options.SyncContext)).ToArray();
-                    
+
                     await Task.WhenAll(processChangesTasks);
                 }
 
                 _logger.LogInformation("Found {EntityTrackingCount} Entities with Sync Engine enabled", syncEngineEntityTypes.Count);
 
-                foreach (var entityType in syncEngineEntityTypes)
+                foreach (var entityType in syncEngineEntityTypes)//.Where(e => e.GetTableName() == "InventMaster"))
                 {
                     var changeRegistration = _databaseChangeMonitor.RegisterForChanges(o =>
                         {
@@ -82,7 +89,12 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
                             o.DatabaseName = databaseName;
                             o.ConnectionString = connectionString;
                         },
-                        t => processChanges(entityType, options.SyncContext));
+                        t =>
+                        {
+                            _logger.LogInformation("Received Change notification for Table: {TableName}", entityType.GetFullTableName());
+
+                            return processChanges(entityType, options.SyncContext);
+                        });
 
                     _changeRegistrations.Add(changeRegistration);
 
@@ -108,13 +120,13 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
                 using var logScope = _logger.BeginScope(dbContext.GetLogContext());
 
-                var changeStuff = scope.ServiceProvider.GetRequiredService<IChangeStuff<TContext>>();
+                var changeSetProcessor = scope.ServiceProvider.GetRequiredService<IChangeSetProcessor<TContext>>();
 
-                await changeStuff.GetChangeSetProcessorsForEntity(entityType, syncContext);
+                await changeSetProcessor.ProcessChangeSet(entityType, syncContext);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error processing Changes for table: {TableName}", entityType.GetFullTableName());
+                _logger.LogError(ex, "Error processing Changes for Table: {TableName}", entityType.GetFullTableName());
             }
         }
 

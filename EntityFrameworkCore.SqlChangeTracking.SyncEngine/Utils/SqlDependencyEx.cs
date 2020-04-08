@@ -6,13 +6,13 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Xml;
 using System.Xml.Linq;
+using Microsoft.Extensions.Logging;
 
 namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
 {
-
-
     public sealed class SqlDependencyEx : IDisposable
     {
         [Flags]
@@ -24,7 +24,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
             Delete = 1 << 3
         }
 
-        public class TableChangedEventArgs : EventArgs
+        public class TableChangedEventArgs
         {
             private readonly string notificationMessage;
 
@@ -443,7 +443,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
 
         private static readonly List<int> ActiveEntities = new List<int>();
 
-        private CancellationTokenSource _threadSource;
+        //private CancellationTokenSource _threadSource;
 
         public string ConversationQueueName
         {
@@ -484,13 +484,17 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
 
         public int Identity { get; private set; }
 
-        public bool Active { get; private set; }
+        //public bool Active { get; private set; }
 
-        public event EventHandler<TableChangedEventArgs> TableChanged;
+        //public event EventHandler<TableChangedEventArgs> TableChanged;
 
-        public event EventHandler NotificationProcessStopped;
+        //public event EventHandler NotificationProcessStopped;
+
+        ILogger<SqlDependencyEx> Logger;
+        IDisposable _logScope;
 
         public SqlDependencyEx(
+            ILogger<SqlDependencyEx> logger,
             string connectionString,
             string databaseName,
             string tableName,
@@ -499,6 +503,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
                 NotificationTypes.Insert | NotificationTypes.Update | NotificationTypes.Delete,
             bool receiveDetails = true, int identity = 1)
         {
+            Logger = logger;
             this.ConnectionString = connectionString;
             this.DatabaseName = databaseName;
             this.TableName = tableName;
@@ -508,126 +513,64 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
             this.Identity = identity;
         }
 
-        public void Start()
+        public Task Start(Func<SqlDependencyEx, TableChangedEventArgs, Task> tableChangedAction, Action<SqlDependencyEx, Exception?>? stoppedAction = null)
         {
+            return Start(tableChangedAction, stoppedAction, CancellationToken.None);
+        }
+
+        public Task NotificationTask { get; private set; }
+
+        public Task Start(Func<SqlDependencyEx, TableChangedEventArgs, Task> tableChangedAction, Action<SqlDependencyEx, Exception?>? stoppedAction, CancellationToken cancellationToken)
+        {
+            //_logScope = Logger.BeginScope(new List<KeyValuePair<string, object>>()
+            //{
+            //    new KeyValuePair<string, object>("SqlEx:Identity", Identity),
+            //    new KeyValuePair<string, object>("SqlEx:Database", DatabaseName),
+            //    new KeyValuePair<string, object>("SqlEx:Table", TableName),
+            //});
+
             lock (ActiveEntities)
             {
                 if (ActiveEntities.Contains(this.Identity))
                     throw new InvalidOperationException("An object with the same identity has already been started.");
+
                 ActiveEntities.Add(this.Identity);
             }
 
             // ASP.NET fix 
             // IIS is not usually restarted when a new website version is deployed
             // This situation leads to notification absence in some cases
-            this.Stop();
+            this.Stop(cancellationToken);
 
             this.InstallNotification();
 
-            _threadSource = new CancellationTokenSource();
+            //_threadSource = new CancellationTokenSource();
 
             // Pass the token to the cancelable operation.
-            ThreadPool.QueueUserWorkItem(NotificationLoop, _threadSource.Token);
+            //ThreadPool.QueueUserWorkItem(NotificationLoop, _threadSource.Token);
+
+            NotificationTask = NotificationLoop(tableChangedAction, stoppedAction, cancellationToken);
+
+            return NotificationTask;
         }
 
-        public void Stop()
+        public void Stop(CancellationToken cancellationToken)
         {
+            _logScope?.Dispose();
+
             UninstallNotification();
 
             lock (ActiveEntities)
                 if (ActiveEntities.Contains(Identity))
                     ActiveEntities.Remove(Identity);
-
-            if (_threadSource == null || _threadSource.IsCancellationRequested)
-                return;
-
-            if (!_threadSource.Token.CanBeCanceled)
-                return;
-
-            _threadSource.Cancel();
-            _threadSource.Dispose();
         }
 
         public void Dispose()
         {
-            Stop();
+            Stop(CancellationToken.None);
         }
 
-        public static int[] GetDependencyDbIdentities(string connectionString, string database)
-        {
-            if (connectionString == null)
-            {
-                throw new ArgumentNullException("connectionString");
-            }
-
-            if (database == null)
-            {
-                throw new ArgumentNullException("database");
-            }
-
-            List<string> result = new List<string>();
-
-            using (SqlConnection connection = new SqlConnection(connectionString))
-            using (SqlCommand command = connection.CreateCommand())
-            {
-                connection.Open();
-                command.CommandText = string.Format(SQL_FORMAT_GET_DEPENDENCY_IDENTITIES, database);
-                command.CommandType = CommandType.Text;
-                using (SqlDataReader reader = command.ExecuteReader())
-                    while (reader.Read())
-                        result.Add(reader.GetString(0));
-            }
-
-            int temp;
-            return
-                result.Select(p => int.TryParse(p, out temp) ? temp : -1)
-                    .Where(p => p != -1)
-                    .ToArray();
-        }
-
-        public static void CleanDatabase(string connectionString, string database)
-        {
-            ExecuteNonQuery(
-                string.Format(SQL_FORMAT_FORCED_DATABASE_CLEANING, database),
-                connectionString);
-        }
-
-        private void NotificationLoop(object input)
-        {
-            try
-            {
-                while (true)
-                {
-                    var message = ReceiveEvent();
-                    Active = true;
-                    if (!string.IsNullOrWhiteSpace(message))
-                    {
-                        OnTableChanged(message);
-                    }
-                }
-            }
-            catch
-            {
-                // ignored
-            }
-            finally
-            {
-                Active = false;
-                OnNotificationProcessStopped();
-            }
-        }
-
-        private static void ExecuteNonQuery(string commandText, string connectionString)
-        {
-            using var conn = new SqlConnection(connectionString);
-            using var command = new SqlCommand(commandText, conn);
-
-            conn.Open();
-            command.CommandType = CommandType.Text;
-            command.ExecuteNonQuery();
-        }
-
-        private string ReceiveEvent()
+        async Task NotificationLoop(Func<SqlDependencyEx, TableChangedEventArgs, Task> tableChangedAction, Action<SqlDependencyEx, Exception?>? stoppedAction, CancellationToken cancellationToken)
         {
             var commandText = string.Format(
                 SQL_FORMAT_RECEIVE_EVENT,
@@ -636,6 +579,51 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
                 COMMAND_TIMEOUT / 2,
                 this.SchemaName);
 
+            Exception exception = null;
+
+            try
+            {
+                using var scope1 = Logger.BeginScope(new List<KeyValuePair<string, object>>()
+                {
+                    new KeyValuePair<string, object>("SqlEx:Identity", Identity),
+                    new KeyValuePair<string, object>("SqlEx:Database", DatabaseName),
+                    new KeyValuePair<string, object>("SqlEx:Table", TableName),
+                    new KeyValuePair<string, object>("SqlEx:CommandText", commandText),
+                });
+
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    Logger.LogTrace("Waiting for Sql Server Receive Event...");
+
+                    var message = await ReceiveEvent(commandText, cancellationToken);
+
+                    using var logScope = Logger.BeginScope(new List<KeyValuePair<string, object>>()
+                    {
+                        new KeyValuePair<string, object>("SqlEx:Message", message),
+                    });
+
+                    Logger.LogTrace("Sql Server Event Received");
+
+                    //Active = true;
+
+                    if (!string.IsNullOrWhiteSpace(message))
+                        await tableChangedAction(this, new TableChangedEventArgs(message));
+                }
+            }
+            catch (Exception ex)
+            {
+                exception = ex;
+                Logger.LogTrace(ex, "Exception caught in Notification Loop");
+            }
+            finally
+            {
+                //Active = false;
+                stoppedAction?.Invoke(this, exception);
+            }
+        }
+
+        async Task<string> ReceiveEvent(string commandText, CancellationToken cancellationToken)
+        {
             using var conn = new SqlConnection(this.ConnectionString);
             using var command = new SqlCommand(commandText, conn);
 
@@ -643,12 +631,79 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
             command.CommandType = CommandType.Text;
             command.CommandTimeout = COMMAND_TIMEOUT;
 
-            using var reader = command.ExecuteReader();
+            using var reader = await command.ExecuteReaderAsync(cancellationToken);
 
-            if (!reader.Read() || reader.IsDBNull(0))
+            if (!(await reader.ReadAsync(cancellationToken)) || reader.IsDBNull(0))
                 return string.Empty;
 
             return reader.GetString(0);
+        }
+
+        public static int[] GetDependencyDbIdentities(string connectionString, string database)
+        {
+            if (connectionString == null)
+                throw new ArgumentNullException("connectionString");
+
+            if (database == null)
+                throw new ArgumentNullException("database");
+
+            List<string> result = new List<string>();
+
+            using var connection = new SqlConnection(connectionString);
+            using var command = connection.CreateCommand();
+            
+            connection.Open();
+            command.CommandText = string.Format(SQL_FORMAT_GET_DEPENDENCY_IDENTITIES, database);
+            command.CommandType = CommandType.Text;
+
+            using var reader = command.ExecuteReader();
+
+            while (reader.Read())
+                result.Add(reader.GetString(0));
+
+            int temp;
+            return result.Select(p => int.TryParse(p, out temp) ? temp : -1)
+                    .Where(p => p != -1)
+                    .ToArray();
+        }
+
+        public static void CleanDatabase(string connectionString, string database)
+        {
+            var commandText = string.Format(SQL_FORMAT_FORCED_DATABASE_CLEANING, database);
+
+            using var conn = new SqlConnection(connectionString);
+            using var command = new SqlCommand(commandText, conn);
+
+            conn.Open();
+            command.CommandType = CommandType.Text;
+            command.ExecuteNonQuery();
+        }
+
+        private void ExecuteNonQuery(string commandText, string connectionString)
+        {
+            using var logScope = Logger.BeginScope(new List<KeyValuePair<string, object>>()
+            {
+                new KeyValuePair<string, object>("SqlEx:Identity", Identity),
+                new KeyValuePair<string, object>("SqlEx:Database", DatabaseName),
+                new KeyValuePair<string, object>("SqlEx:Table", TableName),
+                new KeyValuePair<string, object>("SqlEx:CommandText", commandText),
+            });
+
+            Logger.LogDebug("Executing Non Query for Identity");
+            
+            using var conn = new SqlConnection(connectionString);
+            using var command = new SqlCommand(commandText, conn);
+
+            try
+            {
+                conn.Open();
+                command.CommandType = CommandType.Text;
+                command.ExecuteNonQuery();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Error executing Non Query");
+            }
         }
 
         private string GetUninstallNotificationProcedureScript()
@@ -682,6 +737,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
                 this.ConversationQueueName,
                 this.ConversationServiceName,
                 this.SchemaName);
+
             string installNotificationTriggerScript =
                 string.Format(
                     SQL_FORMAT_CREATE_NOTIFICATION_TRIGGER,
@@ -691,11 +747,13 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
                     this.ConversationServiceName,
                     this.DetailsIncluded ? string.Empty : @"NOT",
                     this.SchemaName);
+
             string uninstallNotificationTriggerScript =
                 string.Format(
                     SQL_FORMAT_CHECK_NOTIFICATION_TRIGGER,
                     this.ConversationTriggerName,
                     this.SchemaName);
+
             string installationProcedureScript =
                 string.Format(
                     SQL_FORMAT_CREATE_INSTALLATION_PROCEDURE,
@@ -706,18 +764,23 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
                     uninstallNotificationTriggerScript.Replace("'", "''"),
                     this.TableName,
                     this.SchemaName);
+
             return installationProcedureScript;
         }
 
         private string GetTriggerTypeByListenerType()
         {
             StringBuilder result = new StringBuilder();
+
             if (this.NotificationType.HasFlag(NotificationTypes.Insert))
                 result.Append("INSERT");
+
             if (this.NotificationType.HasFlag(NotificationTypes.Update))
                 result.Append(result.Length == 0 ? "UPDATE" : ", UPDATE");
+
             if (this.NotificationType.HasFlag(NotificationTypes.Delete))
                 result.Append(result.Length == 0 ? "DELETE" : ", DELETE");
+
             if (result.Length == 0) result.Append("INSERT");
 
             return result.ToString();
@@ -743,16 +806,6 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
             ExecuteNonQuery(GetInstallNotificationProcedureScript(), this.ConnectionString);
             ExecuteNonQuery(GetUninstallNotificationProcedureScript(), this.ConnectionString);
             ExecuteNonQuery(execInstallationProcedureScript, this.ConnectionString);
-        }
-
-        private void OnTableChanged(string message)
-        {
-            TableChanged?.Invoke(this, new TableChangedEventArgs(message));
-        }
-
-        private void OnNotificationProcessStopped()
-        {
-            NotificationProcessStopped?.BeginInvoke(this, EventArgs.Empty, null, null);
         }
     }
 }

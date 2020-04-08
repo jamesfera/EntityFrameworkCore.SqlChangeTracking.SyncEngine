@@ -20,7 +20,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
             //services.AddTransient<IChangeProcessor<TContext>, ChangeProcessor<TContext>>();
 
-            services.TryAddScoped<IChangeProcessorFactory<TContext>, ChangeProcessorFactory<TContext>>();
+            services.TryAddScoped<IBatchProcessorManagerFactory<TContext>, BatchProcessorManagerFactory<TContext>>();
 
             //var processorFactoryRegistry = new ChangeSetProcessorFactoryRegistry<TContext>();
 
@@ -30,7 +30,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
             //services.AddSingleton<ITableChangedNotificationDispatcher, TableChangedNotificationDispatcher>();
 
             services.TryAddSingleton<IDatabaseChangeMonitor, DatabaseChangeMonitor>();
-            services.TryAddScoped<IChangeStuff<TContext>, ChangeStuff<TContext>>();
+            services.TryAddScoped<IChangeSetProcessor<TContext>, ChangeSetProcessor<TContext>>();
 
             //services.AddTransient<ITableChangedNotificationHandler, ChangeProcessorNotificationHandler>();
 
@@ -39,7 +39,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
             if (assemblies != null)
             {
-                var processorInterfaceType = typeof(IChangeSetProcessor<,>);
+                var processorInterfaceType = typeof(IChangeSetBatchProcessor<,>);
                 foreach (var assembly in assemblies)
                 {
                     var processors = assembly.GetTypes().Where(t =>
