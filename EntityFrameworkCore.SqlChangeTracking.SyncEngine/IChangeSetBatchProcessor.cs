@@ -5,8 +5,8 @@ using Microsoft.EntityFrameworkCore;
 
 namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 {
-    public interface IChangeSetBatchProcessor<TEntity, TContext> where TContext : DbContext 
+    public interface IChangeSetBatchProcessor<in TEntity, TContext> where TContext : DbContext 
     {
-        Task ProcessBatch(IEnumerable<ChangeTrackingEntry<TEntity>> changes, ChangeSetProcessorContext<TContext> context);
+        Task ProcessBatch(IEnumerable<IChangeTrackingEntry<TEntity>> changes, IChangeSetProcessorContext<TContext> context);
     }
 }

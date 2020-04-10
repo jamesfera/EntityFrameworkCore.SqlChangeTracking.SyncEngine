@@ -583,13 +583,13 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
 
             try
             {
-                using var scope1 = Logger.BeginScope(new List<KeyValuePair<string, object>>()
-                {
-                    new KeyValuePair<string, object>("SqlEx:Identity", Identity),
-                    new KeyValuePair<string, object>("SqlEx:Database", DatabaseName),
-                    new KeyValuePair<string, object>("SqlEx:Table", TableName),
-                    new KeyValuePair<string, object>("SqlEx:CommandText", commandText),
-                });
+                //using var scope1 = Logger.BeginScope(new List<KeyValuePair<string, object>>()
+                //{
+                //    new KeyValuePair<string, object>("SqlEx:Identity", Identity),
+                //    new KeyValuePair<string, object>("SqlEx:Database", DatabaseName),
+                //    new KeyValuePair<string, object>("SqlEx:Table", TableName),
+                //    new KeyValuePair<string, object>("SqlEx:CommandText", commandText),
+                //});
 
                 while (!cancellationToken.IsCancellationRequested)
                 {
@@ -597,10 +597,10 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
 
                     var message = await ReceiveEvent(commandText, cancellationToken);
 
-                    using var logScope = Logger.BeginScope(new List<KeyValuePair<string, object>>()
-                    {
-                        new KeyValuePair<string, object>("SqlEx:Message", message),
-                    });
+                    //using var logScope = Logger.BeginScope(new List<KeyValuePair<string, object>>()
+                    //{
+                    //    new KeyValuePair<string, object>("SqlEx:Message", message),
+                    //});
 
                     Logger.LogTrace("Sql Server Event Received");
 

@@ -3,12 +3,28 @@ using Microsoft.EntityFrameworkCore;
 
 namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 {
-    public class ChangeSetProcessorContext<TContext> : IDisposable where TContext : DbContext
+    public interface IChangeSetProcessorContext<TContext> where TContext : DbContext
     {
-        internal ChangeSetProcessorContext(TContext dbContext) => DbContext = dbContext;
-        public TContext DbContext { get; private set; }
+        TContext DbContext { get; }
+        string SyncContext { get; }
+        bool RecordCurrentVersion { get; }
 
-        internal bool RecordCurrentVersion { get; set; } = true;
+        void Dispose();
+        void SkipRecordCurrentVersion();
+    }
+
+    public class ChangeSetProcessorContext<TContext> : IDisposable, IChangeSetProcessorContext<TContext> where TContext : DbContext
+    {
+        internal ChangeSetProcessorContext(TContext dbContext, string syncContext)
+        {
+            DbContext = dbContext;
+            SyncContext = syncContext;
+        }
+
+        public TContext DbContext { get; }
+        public string SyncContext { get; }
+
+        public bool RecordCurrentVersion { get; internal set; } = true;
 
         public void SkipRecordCurrentVersion()
         {

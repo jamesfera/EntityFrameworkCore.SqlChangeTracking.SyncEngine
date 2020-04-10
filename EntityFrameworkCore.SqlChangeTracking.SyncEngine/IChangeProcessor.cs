@@ -13,6 +13,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 {
@@ -31,57 +32,66 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
         public KeyValuePair<string, Type> Registration { get; }
     }
 
-    public interface IBatchProcessorManagerFactory<TContext> where TContext : DbContext
+    public interface IProcessorTypeRegistry<TContext> where TContext : DbContext
     {
-        IBatchProcessorManager<TContext> GetBatchProcessorManager(string syncContext = "Default");
+        Type[] GetTypesForSyncContext(string syncContext);
     }
 
-    internal class BatchProcessorManagerFactory<TContext> : IBatchProcessorManagerFactory<TContext> where TContext : DbContext
+    public class ProcessorTypeRegistry<TContext> : IProcessorTypeRegistry<TContext> where TContext : DbContext
     {
-        IServiceProvider _serviceProvider;
         Dictionary<string, Type[]> _registrations;
 
-        public BatchProcessorManagerFactory(IServiceProvider serviceProvider, IEnumerable<IChangeSetProcessorRegistration> registrations)
+        public ProcessorTypeRegistry(IEnumerable<IChangeSetProcessorRegistration> registrations)
         {
-            _serviceProvider = serviceProvider;
-            _registrations = registrations.Select(r => r.Registration).GroupBy(r => r.Key, r => r.Value).ToDictionary(g=>g.Key, g => g.ToArray());
+            _registrations = registrations.Select(r => r.Registration).GroupBy(r => r.Key, r => r.Value).ToDictionary(g => g.Key, g => g.Distinct().ToArray());
         }
 
-        public IBatchProcessorManager<TContext> GetBatchProcessorManager(string syncContext)
+        public Type[] GetTypesForSyncContext(string syncContext)
         {
             if (!_registrations.TryGetValue(syncContext, out Type[] serviceTypes))
-                ;
+                _registrations.Add(syncContext, serviceTypes = new Type[0]);
 
-            var changeSetProcessorFactory = new InternalChangeSetProcessorFactory(_serviceProvider, serviceTypes);
+            return serviceTypes;
+        }
+    }
 
-            return new BatchProcessorManager<TContext>(_serviceProvider.GetService<ILogger<BatchProcessorManager<TContext>>>(), _serviceProvider.GetService<TContext>(), changeSetProcessorFactory);
+    public class ChangeSetBatchProcessorFactory<TContext> : IChangeSetBatchProcessorFactory<TContext> where TContext : DbContext
+    {
+        IServiceProvider _serviceProvider;
+        IProcessorTypeRegistry<TContext> _processorTypeRegistry;
+
+        public ChangeSetBatchProcessorFactory(IServiceProvider serviceProvider, IProcessorTypeRegistry<TContext> processorTypeRegistry)
+        {
+            _serviceProvider = serviceProvider;
+            _processorTypeRegistry = processorTypeRegistry;
         }
 
-        class InternalChangeSetProcessorFactory : IChangeSetBatchProcessorFactory<TContext>
+        public IEnumerable<IChangeSetBatchProcessor<TEntity, TContext>> GetBatchProcessors<TEntity>(string syncContext)
         {
-            IServiceProvider _serviceProvider;
-            Type[] _processorServiceTypes;
+            var entityTypesToMatch = getAssignableTypesForEntity(typeof(TEntity));
 
-            public InternalChangeSetProcessorFactory(IServiceProvider serviceProvider, Type[] processorServiceTypes)
-            {
-                _serviceProvider = serviceProvider;
-                _processorServiceTypes = processorServiceTypes;
-            }
+            var entityProcessorTypes = _processorTypeRegistry.GetTypesForSyncContext(syncContext).Where(p => entityTypesToMatch.Contains(p.GenericTypeArguments[0]) && p.GenericTypeArguments[1] == typeof(TContext));
 
-            public IEnumerable<IChangeSetBatchProcessor<TEntity, TContext>> GetBatchProcessors<TEntity>()
-            {
-                var entityProcessorTypes = _processorServiceTypes.Where(p => p.GenericTypeArguments[0] == typeof(TEntity) && p.GenericTypeArguments[1] == typeof(TContext));
+            var services = entityProcessorTypes.Select(t => (IChangeSetBatchProcessor<TEntity, TContext>)_serviceProvider.GetService(t)).ToArray();
 
-                var services = entityProcessorTypes.Select(t => (IChangeSetBatchProcessor<TEntity, TContext>)_serviceProvider.GetService(t)).ToArray();
+            return services;
+        }
 
-                return services;
-            }
+        List<Type> getAssignableTypesForEntity(Type entityType)
+        {
+            var typeList = new List<Type>() { entityType };
+
+            var interfaces = entityType.GetInterfaces().Where(i => !i.IsGenericType && !i.IsGenericTypeDefinition);
+
+            typeList.AddRange(interfaces);
+
+            return typeList;
         }
     }
 
     public interface IBatchProcessorManager<TContext> where TContext : DbContext
     {
-        Task<bool> ProcessChangesFor<TEntity>(Func<TContext, Task<ChangeTrackingEntry<TEntity>[]>> getChangesFunc, Func<ChangeSetProcessorContext<TContext>, ChangeTrackingEntry<TEntity>[], Task>? batchCompleteFunc = null);
+        ValueTask<bool> ProcessBatch<TEntity>(string syncContext, Func<TContext, string, ValueTask<IChangeTrackingEntry<TEntity>[]>> getBatchFunc, Func<IChangeSetProcessorContext<TContext>, IChangeTrackingEntry<TEntity>[], ValueTask>? batchCompleteFunc = null);
     }
 
     public class BatchProcessorManager<TContext> : IBatchProcessorManager<TContext> where TContext : DbContext
@@ -90,20 +100,20 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
         readonly IChangeSetBatchProcessorFactory<TContext> _changeSetBatchProcessorFactory;
         readonly ILogger<BatchProcessorManager<TContext>> _logger;
 
-        public BatchProcessorManager(ILogger<BatchProcessorManager<TContext>> logger, TContext dbContext, IChangeSetBatchProcessorFactory<TContext> changeSetProcessorFactory)
+        public BatchProcessorManager(TContext dbContext, IChangeSetBatchProcessorFactory<TContext> changeSetBatchProcessorFactory, ILogger<BatchProcessorManager<TContext>> logger = null)
         {
-            _logger = logger;
             _dbContext = dbContext;
-            _changeSetBatchProcessorFactory = changeSetProcessorFactory;
+            _changeSetBatchProcessorFactory = changeSetBatchProcessorFactory;
+            _logger = logger ?? NullLogger<BatchProcessorManager<TContext>>.Instance;
         }
 
-        public async Task<bool> ProcessChangesFor<TEntity>(Func<TContext, Task<ChangeTrackingEntry<TEntity>[]>> getChangesFunc, Func<ChangeSetProcessorContext<TContext>, ChangeTrackingEntry<TEntity>[], Task>? batchCompleteFunc = null)
+        public async ValueTask<bool> ProcessBatch<TEntity>(string syncContext, Func<TContext, string, ValueTask<IChangeTrackingEntry<TEntity>[]>> getBatchFunc, Func<IChangeSetProcessorContext<TContext>, IChangeTrackingEntry<TEntity>[], ValueTask>? batchCompleteFunc = null)
         {
-            var processors = _changeSetBatchProcessorFactory.GetBatchProcessors<TEntity>();
+            var processors = _changeSetBatchProcessorFactory.GetBatchProcessors<TEntity>(syncContext);
 
             if (!processors.Any())
             {
-                _logger.LogWarning("No batch processors found for Entity: {EntityType}", typeof(TEntity));
+                _logger.LogWarning("No batch processors found for Entity: {EntityType} for SyncContext: {SyncContext}", typeof(TEntity), syncContext);
                 return false;
             }
 
@@ -111,23 +121,23 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
             var entityType = dbContext.Model.FindEntityType(typeof(TEntity));
             
-            var changeSetBatch = await getChangesFunc(dbContext);
+            var batch = await getBatchFunc(dbContext, syncContext);
 
-            if (!changeSetBatch.Any())
+            if (!batch.Any())
             {
                 _logger.LogDebug("No items found in batch.");
                 return false;
             }
 
-            _logger.LogInformation("Found {ChangeEntryCount} change(s) in current batch for Table: {TableName}", changeSetBatch.Length, entityType.GetFullTableName());
+            _logger.LogInformation("Found {ChangeEntryCount} change(s) in current batch for Table: {TableName}", batch.Length, entityType.GetFullTableName());
 
-            using var processorContext = new ChangeSetProcessorContext<TContext>(dbContext);
+            using var processorContext = new ChangeSetProcessorContext<TContext>(dbContext, syncContext);
 
             foreach (var changeSetProcessor in processors)
             {
                 try
                 {
-                    await changeSetProcessor.ProcessBatch(changeSetBatch, processorContext);
+                    await changeSetProcessor.ProcessBatch(batch, processorContext);
                 }
                 catch (Exception ex)
                 {
@@ -136,102 +146,25 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
             }
 
             if (batchCompleteFunc != null)
-                await batchCompleteFunc.Invoke(processorContext, changeSetBatch);
+                await batchCompleteFunc.Invoke(processorContext, batch);
 
-            _logger.LogInformation("Successfully processed {ChangeEntryCount} change entries for Table: {TableName}", changeSetBatch.Length, entityType.GetFullTableName());
+            _logger.LogInformation("Successfully processed {ChangeEntryCount} change entries for Table: {TableName}", batch.Length, entityType.GetFullTableName());
 
             return true;
         }
 
-        //public async Task ProcessChangesForTable(IEntityType entityType)
+        //ChangeTrackingEntry convert(Type interfaceType, Type concreteType, object entry)
         //{
-        //    try
-        //    {
-        //        await  _semaphore.WaitAsync();
+        //    var withTypeMethod = typeof(ChangeTrackingEntry<>).MakeGenericType(concreteType).GetMethod(nameof(ChangeTrackingEntry<object>.WithType));
+        //    var method = withTypeMethod.MakeGenericMethod(interfaceType);
 
-        //        using var serviceScope = _serviceScopeFactory.CreateScope();
+        //    var entityParam = Expression.Parameter(entry.GetType(), "entity");
+        //    var withTypeCall = Expression.Call(entityParam, method);
 
-        //        var dbContext = serviceScope.ServiceProvider.GetRequiredService<TContext>();
+        //    var lambda = Expression.Lambda(withTypeCall, entityParam).Compile();
 
-        //        var logContext = dbContext.GetLogContext();
-
-        //        using var logScope = _logger.BeginScope(logContext);
-
-        //        _logger.LogInformation("Processing changes for Table: {TableName}", entityType.GetFullTableName());
-
-        //        var changeSetProcessorFactory = serviceScope.ServiceProvider.GetService<IChangeSetProcessorFactory<TContext>>();
-
-        //        var syncContexts = entityType.GetSyncContexts();
-
-        //        var clrEntityType = entityType.ClrType;
-
-        //        foreach (var syncContext in syncContexts)
-        //        {
-        //            var lastChangedVersion = await dbContext.GetLastChangedVersionFor(entityType, syncContext) ?? 0;
-
-        //            var changeSet = getChangesFunc(entityType)(dbContext, lastChangedVersion, 3);
-                    
-        //            _logger.LogInformation("Found {ChangeSetCount} change(s) for Table: {TableName} for SyncContext: {SyncContext} since version: {ChangeVersion}", changeSet.Count(), entityType.GetFullTableName(), syncContext, lastChangedVersion);
-
-        //            if (!changeSet.Any())
-        //                continue;
-
-        //            //var it = clrEntityType.GetInterfaces().First();
-
-        //            var changeSetProcessors = changeSetProcessorFactory.GetChangeSetProcessorsForEntity(clrEntityType, syncContext).ToArray();
-
-        //            if(!changeSetProcessors.Any())
-        //                return;
-
-        //            using var processorContext = new ChangeSetProcessorContext<TContext>(dbContext);
-
-        //            var newSet = changeSet.Select(c => convert(clrEntityType, clrEntityType, c));
-
-        //            var ofTypeMethod = typeof(Enumerable).GetMethod(nameof(Enumerable.OfType)).MakeGenericMethod(typeof(ChangeTrackingEntry<>).MakeGenericType(clrEntityType));
-
-        //            var res = ofTypeMethod.Invoke(null, new []{ newSet });
-
-        //            foreach (var changeSetProcessor in changeSetProcessors)
-        //            {
-        //                var processorFunc = generateProcessorFunc(clrEntityType, changeSetProcessor);
-
-        //                try
-        //                {
-        //                    await processorFunc(changeSetProcessor, res, processorContext);
-        //                }
-        //                catch (Exception ex)
-        //                {
-        //                    throw;
-        //                }
-        //            }
-
-        //            if (processorContext.RecordCurrentVersion)
-        //                await dbContext.SetLastChangedVersionFor(entityType, changeSet.Max(r => r.ChangeVersion ?? 0), syncContext);
-        //        }
-                
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        _logger.LogError(ex, "Error Processing Changes for Table: {TableName}", entityType.GetFullTableName());
-        //    }
-        //    finally
-        //    {
-        //        _semaphore.Release();
-        //    }
+        //    return lambda.DynamicInvoke(entry) as ChangeTrackingEntry;
         //}
-
-        ChangeTrackingEntry convert(Type interfaceType, Type concreteType, object entry)
-        {
-            var withTypeMethod = typeof(ChangeTrackingEntry<>).MakeGenericType(concreteType).GetMethod(nameof(ChangeTrackingEntry<object>.WithType));
-            var method = withTypeMethod.MakeGenericMethod(interfaceType);
-
-            var entityParam = Expression.Parameter(entry.GetType(), "entity");
-            var withTypeCall = Expression.Call(entityParam, method);
-
-            var lambda = Expression.Lambda(withTypeCall, entityParam).Compile();
-
-            return lambda.DynamicInvoke(entry) as ChangeTrackingEntry;
-        }
 
         //Func<TContext, long, int, IEnumerable<ChangeTrackingEntry>> getChangesFunc(IEntityType entityType)
         //{
@@ -257,19 +190,6 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
         //    return lambda.Compile();
         //}
-        Func<object, object, ChangeSetProcessorContext<TContext>, Task> generateProcessorFunc(Type entityType, object processor)
-        {
-            Type processorType = processor.GetType();
-
-            var processorParameter = Expression.Parameter(typeof(object), "processor");
-            var changeSetParameter = Expression.Parameter(typeof(object), "changeSet");
-            var handlerContextParameter = Expression.Parameter(typeof(ChangeSetProcessorContext<TContext>), "handlerContext");
-
-            var changeSetType = typeof(IEnumerable<>).MakeGenericType(typeof(ChangeTrackingEntry<>).MakeGenericType(entityType)); //(typeof(ChangeTrackingEntry<>).MakeGenericType(entityType)).MakeArrayType();
-
-            var processorCall = Expression.Call(Expression.Convert(processorParameter, processorType), processorType.GetMethod(nameof(IChangeSetBatchProcessor<object, TContext>.ProcessBatch)), Expression.Convert(changeSetParameter, changeSetType), handlerContextParameter);
-
-            return Expression.Lambda<Func<object, object, ChangeSetProcessorContext<TContext>, Task>>(processorCall, processorParameter, changeSetParameter, handlerContextParameter).Compile();
-        }
+    
     }
 }

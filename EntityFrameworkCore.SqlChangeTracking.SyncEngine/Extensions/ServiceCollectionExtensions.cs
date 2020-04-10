@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Extensions;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Options;
 using Microsoft.EntityFrameworkCore;
@@ -12,67 +13,33 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 {
     public static class ServiceCollectionExtensions
     {
-        public static IServiceCollection AddSyncEngine<TContext>(this IServiceCollection services, string syncContext, params Assembly[] assemblies) where TContext : DbContext
+        public static IServiceCollection AddSyncEngine<TContext>(this IServiceCollection services, string syncContext, Func<Type, bool> processorTypePredicateFunc, params Assembly[] assembliesToScan) where TContext : DbContext
         {
-            services.AddTransient<ISyncEngine<TContext>, SyncEngine<TContext>>();
+            services.TryAddTransient<ISyncEngine<TContext>, SyncEngine<TContext>>();
 
-            //services.AddScoped<IChangeSetProcessorFactory<TContext>, ChangeSetProcessorFactory<TContext>>();
-
-            //services.AddTransient<IChangeProcessor<TContext>, ChangeProcessor<TContext>>();
-
-            services.TryAddScoped<IBatchProcessorManagerFactory<TContext>, BatchProcessorManagerFactory<TContext>>();
-
-            //var processorFactoryRegistry = new ChangeSetProcessorFactoryRegistry<TContext>();
-
-            //services.AddSingleton<IChangeSetProcessorFactoryRegistry<TContext>>(processorFactoryRegistry);
-            
-
-            //services.AddSingleton<ITableChangedNotificationDispatcher, TableChangedNotificationDispatcher>();
+            services.TryAddScoped<IChangeSetBatchProcessorFactory<TContext>, ChangeSetBatchProcessorFactory<TContext>>(); 
+            services.TryAddScoped<IBatchProcessorManager<TContext>, BatchProcessorManager<TContext>>();
 
             services.TryAddSingleton<IDatabaseChangeMonitor, DatabaseChangeMonitor>();
-            services.TryAddScoped<IChangeSetProcessor<TContext>, ChangeSetProcessor<TContext>>();
+            services.TryAddSingleton<IChangeSetProcessor<TContext>, ChangeSetProcessor<TContext>>();
+            services.TryAddSingleton<IProcessorTypeRegistry<TContext>, ProcessorTypeRegistry<TContext>>();
 
-            //services.AddTransient<ITableChangedNotificationHandler, ChangeProcessorNotificationHandler>();
-
-            //services.AddScoped<DbSetExtensions.ICurrentTrackingContext, DbSetExtensions.CurrentTrackingContext>();
-            //services.AddScoped<DbSetExtensions.ICurrentContextSetter, DbSetExtensions.CurrentTrackingContext>();
-
-            if (assemblies != null)
+            foreach (var assembly in assembliesToScan)
             {
-                var processorInterfaceType = typeof(IChangeSetBatchProcessor<,>);
-                foreach (var assembly in assemblies)
+                var typesToScan = assembly.GetTypes().Where(processorTypePredicateFunc);
+
+                var processors = typesToScan.Where(t => t.IsChangeProcessor<TContext>()).ToArray();
+
+                foreach (var processorType in processors)
                 {
-                    var processors = assembly.GetTypes().Where(t =>
-                        t.GetInterfaces().Any(i => i.IsGenericType && i.GetGenericTypeDefinition() == processorInterfaceType && i.GenericTypeArguments[1] == typeof(TContext))).ToArray();
+                    var serviceType = processorType.GetChangeProcessorInterface<TContext>();
 
-                    foreach (var processorType in processors)
-                    {
-                        var serviceType = processorType.GetInterfaces().First(i => i.Name == processorInterfaceType.Name);
-
-                        services.AddScoped(serviceType, processorType);
-                        services.AddSingleton<IChangeSetProcessorRegistration>(new ChangeSetProcessorRegistration(new KeyValuePair<string, Type>(syncContext, serviceType)));
-                    }
+                    services.TryAddScoped(serviceType, processorType);
+                    services.AddSingleton<IChangeSetProcessorRegistration>(new ChangeSetProcessorRegistration(new KeyValuePair<string, Type>(syncContext, serviceType)));
                 }
             }
 
             return services;
-        }
-
-        public static IServiceCollection AddHostedSyncEngineService<TContext>(this IServiceCollection services, Action<SyncEngineOptions>? optionsBuilder, params Assembly[] assemblies) where TContext : DbContext
-        {
-            var options = new SyncEngineOptions();
-
-            optionsBuilder?.Invoke(options);
-
-            services.AddHostedService(s => new SyncEngineHostedService<TContext>(s.GetRequiredService<ISyncEngine<TContext>>(), options));
-            services.AddSyncEngine<TContext>(options.SyncContext, assemblies);
-
-            return services;
-        }
-
-        public static IServiceCollection AddHostedSyncEngineService<TContext>(this IServiceCollection services, params Assembly[] assemblies) where TContext : DbContext
-        {
-            return services.AddHostedSyncEngineService<TContext>(null, assemblies);
         }
     }
 }
