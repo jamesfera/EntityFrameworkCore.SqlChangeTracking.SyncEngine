@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>netstandard2.0</TargetFramework>
+    <TargetFramework>netstandard2.1</TargetFramework>
     <LangVersion>latest</LangVersion>
     <nullable>enable</nullable>
     <Authors>James Fera</Authors>
@@ -13,7 +13,6 @@
 
   <ItemGroup>
     <PackageReference Include="EntityFrameworkCore.SqlChangeTracking" Version="0.2.0-alpha0031" />
-    <PackageReference Include="System.Data.SqlClient" Version="4.8.1" />
   </ItemGroup>
 
   <ItemGroup>
