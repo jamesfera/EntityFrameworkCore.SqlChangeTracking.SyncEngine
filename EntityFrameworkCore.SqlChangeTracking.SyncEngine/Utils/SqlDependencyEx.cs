@@ -9,11 +9,12 @@ using System.Threading.Tasks;
 using System.Xml;
 using System.Xml.Linq;
 using Microsoft.Data.SqlClient;
+using Microsoft.EntityFrameworkCore.Internal;
 using Microsoft.Extensions.Logging;
 
 namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
 {
-    public sealed class SqlDependencyEx : IDisposable
+    public sealed class SqlDependencyEx : IAsyncDisposable
     {
         [Flags]
         public enum NotificationTypes
@@ -520,7 +521,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
 
         public Task NotificationTask { get; private set; }
 
-        public Task Start(Func<SqlDependencyEx, TableChangedEventArgs, Task> tableChangedAction, Action<SqlDependencyEx, Exception?>? stoppedAction, CancellationToken cancellationToken)
+        public async Task<Task> Start(Func<SqlDependencyEx, TableChangedEventArgs, Task> tableChangedAction, Action<SqlDependencyEx, Exception?>? stoppedAction, CancellationToken cancellationToken)
         {
             //_logScope = Logger.BeginScope(new List<KeyValuePair<string, object>>()
             //{
@@ -540,34 +541,27 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
             // ASP.NET fix 
             // IIS is not usually restarted when a new website version is deployed
             // This situation leads to notification absence in some cases
-            this.Stop(cancellationToken);
+            await Stop(cancellationToken).ConfigureAwait(false);
 
-            this.InstallNotification();
+            await InstallNotification().ConfigureAwait(false);
 
-            //_threadSource = new CancellationTokenSource();
-
-            // Pass the token to the cancelable operation.
-            //ThreadPool.QueueUserWorkItem(NotificationLoop, _threadSource.Token);
-
-            NotificationTask = NotificationLoop(tableChangedAction, stoppedAction, cancellationToken);
-
-            return NotificationTask;
+            return NotificationLoop(tableChangedAction, stoppedAction, cancellationToken);
         }
 
-        public void Stop(CancellationToken cancellationToken)
+        public async Task Stop(CancellationToken cancellationToken)
         {
             _logScope?.Dispose();
 
-            UninstallNotification();
+            await UninstallNotification().ConfigureAwait(false);
 
             lock (ActiveEntities)
                 if (ActiveEntities.Contains(Identity))
                     ActiveEntities.Remove(Identity);
         }
 
-        public void Dispose()
-        {
-            Stop(CancellationToken.None);
+        public async ValueTask DisposeAsync()
+        { 
+            await Stop(CancellationToken.None);
         }
 
         async Task NotificationLoop(Func<SqlDependencyEx, TableChangedEventArgs, Task> tableChangedAction, Action<SqlDependencyEx, Exception?>? stoppedAction, CancellationToken cancellationToken)
@@ -595,7 +589,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
                 {
                     Logger.LogTrace("Waiting for Sql Server Receive Event...");
 
-                    var message = await ReceiveEvent(commandText, cancellationToken);
+                    var message = await ReceiveEvent(commandText, cancellationToken).ConfigureAwait(false);
 
                     //using var logScope = Logger.BeginScope(new List<KeyValuePair<string, object>>()
                     //{
@@ -607,11 +601,20 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
                     //Active = true;
 
                     if (!string.IsNullOrWhiteSpace(message))
-                        await tableChangedAction(this, new TableChangedEventArgs(message));
+                        await tableChangedAction(this, new TableChangedEventArgs(message)).ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
             {
+                if (ex is SqlException sqlException)
+                {
+                    foreach (SqlError sqlError in sqlException.Errors)
+                    {
+                        if(sqlError.Message.Contains("Operation cancelled by user."))
+                            return;
+                    }
+                }
+
                 exception = ex;
                 Logger.LogTrace(ex, "Exception caught in Notification Loop");
             }
@@ -624,16 +627,17 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
 
         async Task<string> ReceiveEvent(string commandText, CancellationToken cancellationToken)
         {
-            using var conn = new SqlConnection(this.ConnectionString);
-            using var command = new SqlCommand(commandText, conn);
+            await using var conn = new SqlConnection(this.ConnectionString);
+            await using var command = new SqlCommand(commandText, conn);
 
-            conn.Open();
+            await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
+
             command.CommandType = CommandType.Text;
             command.CommandTimeout = COMMAND_TIMEOUT;
 
-            using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
-            if (!(await reader.ReadAsync(cancellationToken)) || reader.IsDBNull(0))
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) || reader.IsDBNull(0))
                 return string.Empty;
 
             return reader.GetString(0);
@@ -679,7 +683,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
             command.ExecuteNonQuery();
         }
 
-        private void ExecuteNonQuery(string commandText, string connectionString)
+        async Task ExecuteNonQuery(string commandText, string connectionString)
         {
             using var logScope = Logger.BeginScope(new List<KeyValuePair<string, object>>()
             {
@@ -690,15 +694,17 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
             });
 
             Logger.LogDebug("Executing Non Query for Identity");
-            
-            using var conn = new SqlConnection(connectionString);
-            using var command = new SqlCommand(commandText, conn);
+
+            await using var conn = new SqlConnection(connectionString);
+            await using var command = new SqlCommand(commandText, conn);
 
             try
             {
-                conn.Open();
+                await conn.OpenAsync().ConfigureAwait(false);
+
                 command.CommandType = CommandType.Text;
-                command.ExecuteNonQuery();
+
+                await command.ExecuteNonQueryAsync().ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -786,26 +792,28 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
             return result.ToString();
         }
 
-        private void UninstallNotification()
+        async Task UninstallNotification()
         {
             string execUninstallationProcedureScript = string.Format(
                 SQL_FORMAT_EXECUTE_PROCEDURE,
                 this.DatabaseName,
                 this.UninstallListenerProcedureName,
                 this.SchemaName);
-            ExecuteNonQuery(execUninstallationProcedureScript, this.ConnectionString);
+
+            await ExecuteNonQuery(execUninstallationProcedureScript, this.ConnectionString).ConfigureAwait(false);
         }
 
-        private void InstallNotification()
+        async Task InstallNotification()
         {
             string execInstallationProcedureScript = string.Format(
                 SQL_FORMAT_EXECUTE_PROCEDURE,
                 this.DatabaseName,
                 this.InstallListenerProcedureName,
                 this.SchemaName);
-            ExecuteNonQuery(GetInstallNotificationProcedureScript(), this.ConnectionString);
-            ExecuteNonQuery(GetUninstallNotificationProcedureScript(), this.ConnectionString);
-            ExecuteNonQuery(execInstallationProcedureScript, this.ConnectionString);
+
+            await ExecuteNonQuery(GetInstallNotificationProcedureScript(), this.ConnectionString).ConfigureAwait(false);
+            await ExecuteNonQuery(GetUninstallNotificationProcedureScript(), this.ConnectionString).ConfigureAwait(false);
+            await ExecuteNonQuery(execInstallationProcedureScript, this.ConnectionString).ConfigureAwait(false);
         }
     }
 }

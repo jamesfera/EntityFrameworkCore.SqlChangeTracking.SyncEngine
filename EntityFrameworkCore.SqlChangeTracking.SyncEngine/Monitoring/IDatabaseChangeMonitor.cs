@@ -17,7 +17,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
         IDisposable RegisterForChanges(Action<DatabaseChangeMonitorRegistrationOptions> optionsBuilder, Func<ITableChangedNotification, Task> changeEventHandler);
     }
 
-    public class DatabaseChangeMonitor : IDatabaseChangeMonitor, IDisposable
+    public class DatabaseChangeMonitor : IDatabaseChangeMonitor, IAsyncDisposable
     {
         ILogger<DatabaseChangeMonitor> _logger;
         ILoggerFactory _loggerFactory;
@@ -26,8 +26,6 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
 
         ConcurrentDictionary<string, SqlDependencyEx> _sqlDependencies = new ConcurrentDictionary<string, SqlDependencyEx>();
         ConcurrentDictionary<string, ImmutableList<ChangeRegistration>> _registeredChangeActions = new ConcurrentDictionary<string, ImmutableList<ChangeRegistration>>();
-
-        SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
 
         CancellationTokenSource _cancellationTokenSource = new CancellationTokenSource();
 
@@ -98,8 +96,6 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
             return registration;
         }
 
-        Task _runThread;
-
         async Task TableChangedEventHandler(SqlDependencyEx sqlEx, SqlDependencyEx.TableChangedEventArgs e)
         {
             string? tableName = null;
@@ -150,16 +146,24 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
             }
         }
 
-        public void Dispose()
+        bool _disposed = false;
+        public async ValueTask DisposeAsync()
         {
-            _cancellationTokenSource.Cancel();
+            if (!_disposed)
+            {
+                _disposed = true;
 
-            _sqlDependencies?.Values.ToList().ForEach(d => d.Stop(_cancellationTokenSource.Token));
-            _sqlDependencies?.Clear();
+                _cancellationTokenSource.Cancel();
 
-            //_notificationTasks.ForEach(t => t.Dispose());
+                foreach (var sqlDependencyEx in _sqlDependencies.Values)
+                {
+                    await sqlDependencyEx.DisposeAsync().ConfigureAwait(false);
+                }
 
-            _cancellationTokenSource.Dispose();
+                //_sqlDependencies?.Clear();
+
+                _cancellationTokenSource.Dispose();
+            }
         }
 
         class ChangeRegistration : IDisposable

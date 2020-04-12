@@ -66,7 +66,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
                 foreach (var syncEngineEntityType in syncEngineEntityTypes)
                 {
-                    await dbContext.InitializeSyncEngine(syncEngineEntityType, options.SyncContext);
+                    await dbContext.InitializeSyncEngine(syncEngineEntityType, options.SyncContext).ConfigureAwait(false);
                 }
 
                 //syncEngineEntityTypes.ForEach(async e => await dbContext.InitializeSyncEngine(e, options.SyncContext));
@@ -79,12 +79,12 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
                     var processChangesTasks = syncEngineEntityTypes.Select(e => processChanges(e, options.SyncContext)).ToArray();
 
-                    await Task.WhenAll(processChangesTasks);
+                    await Task.WhenAll(processChangesTasks).ConfigureAwait(false);
                 }
 
                 _logger.LogInformation("Found {EntityTrackingCount} Entities with Sync Engine enabled for SyncContext: {SyncContext}", syncEngineEntityTypes.Count, options.SyncContext);
 
-                foreach (var entityType in syncEngineEntityTypes)//.Where(e => e.GetTableName() == "InventMaster"))
+                foreach (var entityType in syncEngineEntityTypes)
                 {
                     var changeRegistration = _databaseChangeMonitor.RegisterForChanges(o =>
                         {
@@ -118,7 +118,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
         {
             try
             {
-                await _changeSetProcessor.ProcessChanges(entityType, syncContext);
+                await _changeSetProcessor.ProcessChanges(entityType, syncContext).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -129,6 +129,8 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
         public Task Stop(CancellationToken cancellationToken)
         {
             _changeRegistrations.ForEach(r => r.Dispose());
+
+            _logger.LogInformation("Shutting down Sync Engine.");
 
             return Task.CompletedTask;
         }
