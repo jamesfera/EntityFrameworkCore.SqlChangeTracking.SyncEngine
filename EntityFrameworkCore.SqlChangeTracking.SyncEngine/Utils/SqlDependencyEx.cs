@@ -541,14 +541,14 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils
             // ASP.NET fix 
             // IIS is not usually restarted when a new website version is deployed
             // This situation leads to notification absence in some cases
-            await Stop(cancellationToken).ConfigureAwait(false);
+            await UninstallNotification().ConfigureAwait(false);
 
             await InstallNotification().ConfigureAwait(false);
 
             return NotificationLoop(tableChangedAction, stoppedAction, cancellationToken);
         }
 
-        public async Task Stop(CancellationToken cancellationToken)
+        public async ValueTask Stop(CancellationToken cancellationToken)
         {
             _logScope?.Dispose();
 
