@@ -4,12 +4,22 @@ using System.Threading;
 using System.Threading.Tasks;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Options;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 
 namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 {
-    public interface ISyncEngine<TDbContext> where TDbContext : DbContext
+    public interface ISyncEngine
     {
-        Task Start(SyncEngineOptions options, CancellationToken cancellationToken);
+        string SyncContext { get; }
+        Type DbContextType { get; }
+        Task ProcessAllChanges();
+        Task ProcessChanges(IEntityType entityType);
+        Task ProcessChanges<TEntity>();
+        Task ProcessChanges(Type clrEntityType);
+
+        Task ResetAllSyncVersions();
+
+        Task Start(CancellationToken cancellationToken);
         Task Stop(CancellationToken cancellationToken);
     }
 }

@@ -41,13 +41,16 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
                 return new ValueTask();
             }
 
-            var method = typeof(IBatchProcessorManager<TContext>).GetMethod(nameof(IBatchProcessorManager<TContext>.ProcessBatch)).MakeGenericMethod(entityType.ClrType);
+            var method = GetType().GetMethod(nameof(processBatch), BindingFlags.NonPublic | BindingFlags.Instance).MakeGenericMethod(entityType.ClrType);
 
-            while (true)
+            IChangeTrackingEntry[] currentBatch;
+
+            do
             {
                 using var scope = _serviceScopeFactory.CreateScope();
 
                 var dbContext = scope.ServiceProvider.GetService<TContext>();
+                var changeSetBatchProcessorFactory = scope.ServiceProvider.GetRequiredService<IChangeSetBatchProcessorFactory<TContext>>();
 
                 var logContext = dbContext.GetLogContext();
 
@@ -55,7 +58,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
                 using var logScope = _logger.BeginScope(logContext);
 
-                var processor = scope.ServiceProvider.GetRequiredService<IBatchProcessorManager<TContext>>() ;
+                using var processorContext = new ChangeSetProcessorContext<TContext>(dbContext, syncContext);
 
                 //IDbContextTransaction transaction;
 
@@ -68,13 +71,51 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
                 var changesFunc = getNextChangeSetFunc(entityType);
 
-                var result = await (ValueTask<bool>) method.Invoke(processor, new[] { syncContext as object, changesFunc, (Func<IChangeSetProcessorContext<TContext>, IChangeTrackingEntry[], ValueTask>) BatchCompleteFunc});
+                currentBatch = await (ValueTask<IChangeTrackingEntry[]>) method.Invoke(this, new[] {syncContext as object, changesFunc, dbContext, changeSetBatchProcessorFactory, processorContext});
 
-                if (!result)
-                    break;
+                if (processorContext.RecordCurrentVersion && currentBatch.Any())
+                    await dbContext.SetLastChangedVersionAsync(entityType, syncContext, currentBatch.Max(e => e.ChangeVersion ?? 0));
 
                 //await t?.CommitAsync();
+
+            } while (currentBatch?.Any() ?? false);
+        }
+
+        async ValueTask<IChangeTrackingEntry[]> processBatch<TEntity>(string syncContext, Func<TContext, string, ValueTask<IChangeTrackingEntry<TEntity>[]>> getBatchFunc, TContext dbContext, IChangeSetBatchProcessorFactory<TContext> changeSetBatchProcessorFactory, ChangeSetProcessorContext<TContext> processorContext)
+        {
+            var processors = changeSetBatchProcessorFactory.GetBatchProcessors<TEntity>(syncContext).ToArray();
+
+            if (!processors.Any())
+            {
+                _logger.LogWarning("No batch processors found for Entity: {EntityType} for SyncContext: {SyncContext}", typeof(TEntity), syncContext);
+                return new IChangeTrackingEntry[0];
             }
+
+            var batch = await getBatchFunc(dbContext, syncContext);
+
+            if (!batch.Any())
+            {
+                _logger.LogDebug("No items found in batch.");
+                return new IChangeTrackingEntry[0];
+            }
+
+            var entityType = dbContext.Model.FindEntityType(typeof(TEntity));
+
+            _logger.LogInformation("Found {ChangeEntryCount} change(s) in current batch for Table: {TableName}", batch.Length, entityType.GetFullTableName());
+
+            foreach (var changeSetProcessor in processors)
+            {
+                try
+                {
+                    await changeSetProcessor.ProcessBatch(batch, processorContext);
+                }
+                catch (Exception ex)
+                {
+                    throw;
+                }
+            }
+
+            return batch;
         }
 
         Delegate getNextChangeSetFunc(IEntityType entityType)

@@ -8,6 +8,7 @@ using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Options;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 {
@@ -15,14 +16,15 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
     {
         public static IServiceCollection AddSyncEngine<TContext>(this IServiceCollection services, string syncContext, Func<Type, bool> processorTypePredicateFunc, params Assembly[] assembliesToScan) where TContext : DbContext
         {
-            services.TryAddTransient<ISyncEngine<TContext>, SyncEngine<TContext>>();
-
             services.TryAddScoped<IChangeSetBatchProcessorFactory<TContext>, ChangeSetBatchProcessorFactory<TContext>>(); 
-            services.TryAddScoped<IBatchProcessorManager<TContext>, BatchProcessorManager<TContext>>();
+            //services.TryAddScoped<IBatchProcessorManager<TContext>, BatchProcessorManager<TContext>>();
 
             services.TryAddSingleton<IDatabaseChangeMonitor, DatabaseChangeMonitor>();
             services.TryAddSingleton<IChangeSetProcessor<TContext>, ChangeSetProcessor<TContext>>();
             services.TryAddSingleton<IProcessorTypeRegistry<TContext>, ProcessorTypeRegistry<TContext>>();
+
+            services.TryAddSingleton<ISyncEngineManager, SyncEngineManager>();
+            services.TryAddSingleton<ISyncManager>(s => s.GetRequiredService<ISyncEngineManager>());
 
             foreach (var assembly in assembliesToScan)
             {

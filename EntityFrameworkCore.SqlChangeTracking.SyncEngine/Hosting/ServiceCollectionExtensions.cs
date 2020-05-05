@@ -21,7 +21,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Hosting
 
             processorTypePredicate ??= type => true;
 
-            services.AddSingleton<IHostedService>(s => new SyncEngineHostedService<TContext>(s.GetRequiredService<ISyncEngine<TContext>>(), options));
+            services.AddSingleton<IHostedService>(s => new SyncEngineHostedService(s.GetRequiredService<ISyncEngineManager>().CreateSyncEngine<TContext>(options.SyncContext)));
             services.AddSyncEngine<TContext>(options.SyncContext, processorTypePredicate, assemblies);
 
             return services;

@@ -7,20 +7,18 @@ using Microsoft.Extensions.Hosting;
 
 namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 {
-    public class SyncEngineHostedService<TContext> : IHostedService where TContext : DbContext
+    public class SyncEngineHostedService : IHostedService
     {
-        readonly ISyncEngine<TContext> _syncEngine;
-        SyncEngineOptions _syncEngineOptions;
+        readonly ISyncEngine _syncEngine;
 
-        public SyncEngineHostedService(ISyncEngine<TContext> syncEngine, SyncEngineOptions syncEngineOptions)
+        public SyncEngineHostedService(ISyncEngine syncEngine)
         {
             _syncEngine = syncEngine;
-            _syncEngineOptions = syncEngineOptions;
         }
 
         public async Task StartAsync(CancellationToken cancellationToken)
         {
-            await _syncEngine.Start(_syncEngineOptions, cancellationToken);
+            await _syncEngine.Start(cancellationToken);
         }
 
         public Task StopAsync(CancellationToken cancellationToken)
