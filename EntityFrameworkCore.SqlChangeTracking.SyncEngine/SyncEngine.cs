@@ -85,13 +85,6 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
                 serviceScope.Dispose();
 
-                //if (options.SynchronizeChangesOnStartup)
-                {
-                    _logger.LogInformation("Synchronizing changes since last run...");
-
-                    await ProcessAllChanges();
-                }
-
                 _logger.LogInformation("Found {EntityTrackingCount} Entities with Sync Engine enabled for SyncContext: {SyncContext}", _syncEngineEntityTypes.Count, SyncContext);
 
                 foreach (var entityType in _syncEngineEntityTypes)
@@ -138,11 +131,13 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
             try
             {
+                _logger.LogInformation("Processing changes for Entity: {EntityType}", entityType.ClrType);
                 await _changeSetProcessor.ProcessChanges(entityType, SyncContext).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error processing Changes for Table: {TableName} for SyncContext: {SyncContext}", entityType.GetFullTableName(), SyncContext);
+                throw;
             }
         }
 

@@ -15,6 +15,8 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
     public interface IDatabaseChangeMonitor
     {
         IDisposable RegisterForChanges(Action<DatabaseChangeMonitorRegistrationOptions> optionsBuilder, Func<ITableChangedNotification, Task> changeEventHandler);
+        void Enable();
+        void Disable();
     }
 
     public class DatabaseChangeMonitor : IDatabaseChangeMonitor, IAsyncDisposable
@@ -31,31 +33,12 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
 
         ImmutableList<Task> _notificationTasks = ImmutableList<Task>.Empty;
 
+        bool _enabled = true;
+
         public DatabaseChangeMonitor(ILogger<DatabaseChangeMonitor> logger, ILoggerFactory loggerFactory)
         {
             _logger = logger;
             _loggerFactory = loggerFactory;
-
-
-            //if (options.CleanDatabaseOnStartup)
-            //SqlDependencyEx.CleanDatabase(connectionString, databaseName);
-
-            //_runThread = Task.Run(async () =>
-            //{
-            //    while (!_cancellationTokenSource.IsCancellationRequested)
-            //    {
-            //        if (_notificationTasks.Count == 0)
-            //            await Task.Delay(500);
-            //        else
-            //        {
-            //            var task = await Task.WhenAny(_notificationTasks.ToArray());
-
-            //            await task;
-            //            int j = 0;
-            //        }
-            //        //_logger.LogInformation("Task pulsed");
-            //    }
-            //});
         }
 
         public IDisposable RegisterForChanges(Action<DatabaseChangeMonitorRegistrationOptions> optionsBuilder, Func<ITableChangedNotification, Task> changeEventHandler)
@@ -96,6 +79,16 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
             return registration;
         }
 
+        public void Enable()
+        {
+            _enabled = true;
+        }
+
+        public void Disable()
+        {
+            _enabled = false;
+        }
+
         async Task TableChangedEventHandler(SqlDependencyEx sqlEx, SqlDependencyEx.TableChangedEventArgs e)
         {
             string? tableName = null;
@@ -103,6 +96,12 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
             try
             {
                 tableName = $"{sqlEx.SchemaName}.{sqlEx.TableName}";
+
+                if (!_enabled)
+                {
+                    _logger.LogDebug("Database Change Monitor disabled.  Skipping change notification for table: {TableName}", tableName);
+                    return;
+                }
 
                 _logger.LogInformation("Change detected in table: {TableName} ", tableName);
 
