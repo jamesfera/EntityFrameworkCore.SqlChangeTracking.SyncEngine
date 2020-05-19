@@ -34,10 +34,13 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
                 foreach (var processorType in processors)
                 {
-                    var serviceType = processorType.GetChangeProcessorInterface<TContext>();
+                    var serviceTypes = processorType.GetChangeProcessorInterfaces<TContext>();
 
-                    services.TryAddScoped(serviceType, processorType);
-                    services.AddSingleton<IChangeSetProcessorRegistration>(new ChangeSetProcessorRegistration(new KeyValuePair<string, Type>(syncContext, serviceType)));
+                    foreach (var serviceType in serviceTypes)
+                    {
+                        services.TryAddScoped(serviceType, processorType);
+                        services.AddSingleton<IChangeSetProcessorRegistration>(new ChangeSetProcessorRegistration(new KeyValuePair<string, Type>(syncContext, serviceType)));
+                    }
                 }
             }
 
