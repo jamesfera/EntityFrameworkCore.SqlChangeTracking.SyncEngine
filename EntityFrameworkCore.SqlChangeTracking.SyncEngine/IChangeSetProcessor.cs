@@ -11,6 +11,7 @@ using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Extensions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.FileSystemGlobbing.Internal.PathSegments;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -26,7 +27,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
         IServiceScopeFactory _serviceScopeFactory;
         ILogger<ChangeSetProcessor<TContext>> _logger;
 
-        public ChangeSetProcessor(IServiceScopeFactory serviceScopeFactory, ILogger<ChangeSetProcessor<TContext>> logger = null)
+        public ChangeSetProcessor(IServiceScopeFactory serviceScopeFactory, ILogger<ChangeSetProcessor<TContext>>? logger = null)
         {
             _serviceScopeFactory = serviceScopeFactory;
             _logger = logger ?? NullLogger<ChangeSetProcessor<TContext>>.Instance;
@@ -85,9 +86,18 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
         {
             var processors = changeSetBatchProcessorFactory.GetBatchProcessors<TEntity>(syncContext).ToArray();
 
+            var entityType = dbContext.Model.FindEntityType(typeof(TEntity));
+
+            var logContext = new List<KeyValuePair<string, object>>
+            {
+                new KeyValuePair<string, object>("ClrEntityType", entityType.ClrType.PrettyName())
+            };
+
+            using var logScope = _logger.BeginScope(logContext);
+
             if (!processors.Any())
             {
-                _logger.LogWarning("No batch processors found for Entity: {EntityType} for SyncContext: {SyncContext}", typeof(TEntity), syncContext);
+                _logger.LogWarning("No batch processors found for Entity: {EntityName} in Table: {TableName} for SyncContext: {SyncContext}", entityType.ClrType.Name, entityType.GetFullTableName(), syncContext);
                 return new IChangeTrackingEntry[0];
             }
 
@@ -95,25 +105,29 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
             if (!batch.Any())
             {
-                _logger.LogDebug("No items found in batch.");
+                _logger.LogDebug("No items found in batch for Entity: {EntityName} in Table: {TableName}", entityType.ClrType.Name, entityType.GetFullTableName());
                 return new IChangeTrackingEntry[0];
             }
 
-            var entityType = dbContext.Model.FindEntityType(typeof(TEntity));
-
-            _logger.LogInformation("Found {ChangeEntryCount} change(s) in current batch for Table: {TableName}", batch.Length, entityType.GetFullTableName());
+            _logger.LogInformation("Found {ChangeEntryCount} change(s) in current batch for Entity: {EntityName} in Table: {TableName}", batch.Length, entityType.ClrType.Name, entityType.GetFullTableName());
 
             foreach (var changeSetProcessor in processors)
             {
                 try
                 {
+                    _logger.LogDebug("Processing {ChangeEntryCount} change(s) with Change Set Processor: {ChangeSetProcessorName}", batch.Length, changeSetProcessor.GetType().PrettyName());
+
                     await changeSetProcessor.ProcessBatch(batch, processorContext);
+
+                    _logger.LogDebug("{ChangeEntryCount} change(s) successfully processed with Change Set Processor: {ChangeSetProcessorName}", batch.Length, changeSetProcessor.GetType().PrettyName());
                 }
-                catch (Exception ex)
+                catch (Exception ex) when(_logger.LogErrorWithContext(ex, "Change Set Processor: {ChangeSetProcessorName} failed.", changeSetProcessor.GetType().PrettyName()))
                 {
                     throw;
                 }
             }
+
+            _logger.LogInformation("{ChangeEntryCount} change(s) successfully processed for Entity: {EntityName} in Table: {TableName}", batch.Length, entityType.ClrType.Name, entityType.GetFullTableName());
 
             return batch;
         }
