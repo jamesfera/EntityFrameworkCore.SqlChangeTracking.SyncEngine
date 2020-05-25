@@ -127,7 +127,12 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
                 }
             }
 
-            _logger.LogInformation("{ChangeEntryCount} change(s) successfully processed for Entity: {EntityName} in Table: {TableName}", batch.Length, entityType.ClrType.Name, entityType.GetFullTableName());
+            var actualProcessed = batch.Length - processorContext.Skipped;
+
+            _logger.LogInformation("{ChangeEntryCount} change(s) successfully processed for Entity: {EntityName} in Table: {TableName}", actualProcessed, entityType.ClrType.Name, entityType.GetFullTableName());
+
+            if (processorContext.Skipped > 0)
+                _logger.LogInformation("{SkippedChangeEntryCount} change(s) skipped processing for Entity: {EntityName} in Table: {TableName}", processorContext.Skipped, entityType.ClrType.Name, entityType.GetFullTableName());
 
             return batch;
         }

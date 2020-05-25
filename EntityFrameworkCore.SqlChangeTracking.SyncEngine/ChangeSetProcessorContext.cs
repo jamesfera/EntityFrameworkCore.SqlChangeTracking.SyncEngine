@@ -8,12 +8,12 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
         TContext DbContext { get; }
         string SyncContext { get; }
         bool RecordCurrentVersion { get; }
-
+        void Skip();
         void Dispose();
         void SkipRecordCurrentVersion();
     }
 
-    public class ChangeSetProcessorContext<TContext> : IDisposable, IChangeSetProcessorContext<TContext> where TContext : DbContext
+    internal class ChangeSetProcessorContext<TContext> : IDisposable, IChangeSetProcessorContext<TContext> where TContext : DbContext
     {
         internal ChangeSetProcessorContext(TContext dbContext, string syncContext)
         {
@@ -21,9 +21,15 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
             SyncContext = syncContext;
         }
 
+        public int Skipped { get; private set; } = 0;
+
+        public void Skip()
+        {
+            Skipped++;
+        }
+
         public TContext DbContext { get; }
         public string SyncContext { get; }
-
         public bool RecordCurrentVersion { get; internal set; } = true;
 
         public void SkipRecordCurrentVersion()
