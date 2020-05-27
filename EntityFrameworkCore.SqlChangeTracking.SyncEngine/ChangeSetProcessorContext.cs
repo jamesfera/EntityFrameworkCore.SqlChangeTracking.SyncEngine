@@ -9,6 +9,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
         string SyncContext { get; }
         bool RecordCurrentVersion { get; }
         void Skip();
+        int Skipped { get; }
         void Dispose();
         void SkipRecordCurrentVersion();
     }
