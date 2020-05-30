@@ -41,42 +41,53 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
             _loggerFactory = loggerFactory;
         }
 
+        static SemaphoreSlim _registrationSemaphore = new SemaphoreSlim(1,1);
+
         public IDisposable RegisterForChanges(Action<DatabaseChangeMonitorRegistrationOptions> optionsBuilder, Func<ITableChangedNotification, Task> changeEventHandler)
         {
-            var options = new DatabaseChangeMonitorRegistrationOptions();
-
-            optionsBuilder.Invoke(options);
-
-            var registrationKey = $"{options.DatabaseName}.{options.SchemaName}.{options.TableName}";
-
-            var registration = new ChangeRegistration(registrationKey, _registeredChangeActions, changeEventHandler);
-
-            _registeredChangeActions.AddOrUpdate(registrationKey, new List<ChangeRegistration>(new[] { registration }).ToImmutableList(), (k, r) => r.Add(registration));
-
-            _sqlDependencies.GetOrAdd(registrationKey, k =>
+            try
             {
-                var id = Interlocked.Increment(ref SqlDependencyIdentity);
+                _registrationSemaphore.Wait();
 
-                var fullTableName = $"{options.SchemaName}.{options.TableName}";
+                var options = new DatabaseChangeMonitorRegistrationOptions();
 
-                var sqlTableDependency = new SqlDependencyEx(_loggerFactory.CreateLogger<SqlDependencyEx>(), options.ConnectionString, options.DatabaseName, options.TableName, options.SchemaName, identity: SqlDependencyIdentity, receiveDetails: true);
-                
-                var notificationTask = sqlTableDependency.Start(TableChangedEventHandler, (sqlEx, ex) =>
+                optionsBuilder.Invoke(options);
+
+                var registrationKey = $"{options.DatabaseName}.{options.SchemaName}.{options.TableName}";
+
+                var registration = new ChangeRegistration(registrationKey, _registeredChangeActions, changeEventHandler);
+
+                _registeredChangeActions.AddOrUpdate(registrationKey, new List<ChangeRegistration>(new[] {registration}).ToImmutableList(), (k, r) => r.Add(registration));
+
+                _sqlDependencies.GetOrAdd(registrationKey, k =>
                 {
-                    if(ex == null)
-                        _logger.LogInformation("Table change listener terminated for table: {TableName} database: {DatabaseName}", fullTableName, options.DatabaseName);
-                    else
-                        _logger.LogError(ex, "Table change listener terminated for table: {TableName} database: {DatabaseName}", fullTableName, options.DatabaseName);
-                }, _cancellationTokenSource.Token);
+                    var id = Interlocked.Increment(ref SqlDependencyIdentity);
 
-                _logger.LogInformation("Created Change Event Listener on table {TableName} with identity: {SqlDependencyId}", fullTableName, id);
+                    var fullTableName = $"{options.SchemaName}.{options.TableName}";
 
-                _notificationTasks = _notificationTasks.Add(notificationTask);
+                    var sqlTableDependency = new SqlDependencyEx(_loggerFactory.CreateLogger<SqlDependencyEx>(), options.ConnectionString, options.DatabaseName, options.TableName, options.SchemaName, identity: SqlDependencyIdentity, receiveDetails: true);
 
-                return sqlTableDependency;
-            });
+                    var notificationTask = sqlTableDependency.Start(TableChangedEventHandler, (sqlEx, ex) =>
+                    {
+                        if (ex == null)
+                            _logger.LogInformation("Table change listener terminated for table: {TableName} database: {DatabaseName}", fullTableName, options.DatabaseName);
+                        else
+                            _logger.LogError(ex, "Table change listener terminated for table: {TableName} database: {DatabaseName}", fullTableName, options.DatabaseName);
+                    }, _cancellationTokenSource.Token).Result;
 
-            return registration;
+                    _logger.LogInformation("Created Change Event Listener on table {TableName} with identity: {SqlDependencyId}", fullTableName, id);
+
+                    _notificationTasks = _notificationTasks.Add(notificationTask);
+
+                    return sqlTableDependency;
+                });
+
+                return registration;
+            }
+            finally
+            {
+                _registrationSemaphore.Release();
+            }
         }
 
         public void Enable()
