@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Extensions;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Utils;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
 {
@@ -26,6 +27,8 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
 
         static int SqlDependencyIdentity = 0;
 
+        string _databaseName;
+
         ConcurrentDictionary<string, SqlDependencyEx> _sqlDependencies = new ConcurrentDictionary<string, SqlDependencyEx>();
         ConcurrentDictionary<string, ImmutableList<ChangeRegistration>> _registeredChangeActions = new ConcurrentDictionary<string, ImmutableList<ChangeRegistration>>();
 
@@ -35,9 +38,9 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
 
         bool _enabled = true;
 
-        public DatabaseChangeMonitor(ILogger<DatabaseChangeMonitor> logger, ILoggerFactory loggerFactory)
+        public DatabaseChangeMonitor(ILoggerFactory loggerFactory = null)
         {
-            _logger = logger;
+            _logger = loggerFactory?.CreateLogger<DatabaseChangeMonitor>() ?? NullLogger<DatabaseChangeMonitor>.Instance;
             _loggerFactory = loggerFactory;
         }
 
@@ -53,6 +56,8 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
 
                 optionsBuilder.Invoke(options);
 
+                _databaseName = options.DatabaseName;
+
                 var registrationKey = $"{options.DatabaseName}.{options.SchemaName}.{options.TableName}";
 
                 var registration = new ChangeRegistration(registrationKey, _registeredChangeActions, changeEventHandler);
@@ -65,7 +70,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
 
                     var fullTableName = $"{options.SchemaName}.{options.TableName}";
 
-                    var sqlTableDependency = new SqlDependencyEx(_loggerFactory.CreateLogger<SqlDependencyEx>(), options.ConnectionString, options.DatabaseName, options.TableName, options.SchemaName, identity: SqlDependencyIdentity, receiveDetails: true);
+                    var sqlTableDependency = new SqlDependencyEx(_loggerFactory?.CreateLogger<SqlDependencyEx>() ?? NullLogger<SqlDependencyEx>.Instance, options.ConnectionString, options.DatabaseName, options.TableName, options.SchemaName, identity: SqlDependencyIdentity, receiveDetails: true);
 
                     var notificationTask = sqlTableDependency.Start(TableChangedEventHandler, (sqlEx, ex) =>
                     {
@@ -92,11 +97,13 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
 
         public void Enable()
         {
+            _logger.LogInformation("Change Notifications Enabled for Database: {DatabaseName}", _databaseName);
             _enabled = true;
         }
 
         public void Disable()
         {
+            _logger.LogInformation("Change Notifications Disabled for Database: {DatabaseName}", _databaseName);
             _enabled = false;
         }
 
@@ -114,7 +121,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
                     return;
                 }
 
-                _logger.LogInformation("Change detected in table: {TableName} ", tableName);
+                _logger.LogDebug("Change detected in table: {TableName} ", tableName);
 
                 var registrationKey = $"{sqlEx.DatabaseName}.{sqlEx.SchemaName}.{sqlEx.TableName}";
 

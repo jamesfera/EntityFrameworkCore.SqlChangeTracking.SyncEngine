@@ -109,7 +109,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
                 return new IChangeTrackingEntry[0];
             }
 
-            _logger.LogInformation("Found {ChangeEntryCount} change(s) in current batch for Entity: {EntityName} in Table: {TableName}", batch.Length, entityType.ClrType.Name, entityType.GetFullTableName());
+            _logger.LogDebug("Found {ChangeEntryCount} change(s) in current batch for Entity: {EntityName} in Table: {TableName}", batch.Length, entityType.ClrType.Name, entityType.GetFullTableName());
 
             foreach (var changeSetProcessor in processors)
             {

@@ -131,7 +131,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
             try
             {
-                _logger.LogInformation("Processing changes for Entity: {EntityType}", entityType.ClrType);
+                _logger.LogDebug("Processing changes for Entity: {EntityType}", entityType.ClrType);
                 await _changeSetProcessor.ProcessChanges(entityType, SyncContext).ConfigureAwait(false);
             }
             catch (Exception ex)
