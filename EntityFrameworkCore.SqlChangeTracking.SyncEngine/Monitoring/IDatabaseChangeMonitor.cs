@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -25,7 +26,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
         ILogger<DatabaseChangeMonitor> _logger;
         ILoggerFactory _loggerFactory;
 
-        static int SqlDependencyIdentity = 0;
+        static int SqlDependencyIdentity = Assembly.GetEntryAssembly().GetHashCode();
 
         string _databaseName;
 
@@ -80,7 +81,7 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring
                             _logger.LogError(ex, "Table change listener terminated for table: {TableName} database: {DatabaseName}", fullTableName, options.DatabaseName);
                     }, _cancellationTokenSource.Token).Result;
 
-                    _logger.LogInformation("Created Change Event Listener on table {TableName} with identity: {SqlDependencyId}", fullTableName, id);
+                    _logger.LogInformation("Created Change Event Listener on table {TableName} with identity: {SqlDependencyId}", fullTableName, SqlDependencyIdentity);
 
                     _notificationTasks = _notificationTasks.Add(notificationTask);
 

@@ -140,10 +140,10 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Extensions
                                        AND SyncContext = '{syncContext}')
                        BEGIN
                            INSERT INTO {nameof(LastSyncedChangeVersion)} (TableName, SyncContext, LastSyncedVersion)
-                           VALUES ('{entityType.GetFullTableName()}', '{syncContext}', (SELECT CHANGE_TRACKING_CURRENT_VERSION()))
+                           VALUES ('{entityType.GetFullTableName()}', '{syncContext}', 0)
                        END
                     END";
-
+            //VALUES ('{entityType.GetFullTableName()}', '{syncContext}', (SELECT CHANGE_TRACKING_CURRENT_VERSION()))
             return new ValueTask(dbContext.Database.ExecuteSqlRawAsync(sql));
         }
 
