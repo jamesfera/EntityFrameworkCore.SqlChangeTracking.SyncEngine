@@ -101,7 +101,17 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
                 return new IChangeTrackingEntry[0];
             }
 
-            var batch = await getBatchFunc(dbContext, syncContext);
+            IChangeTrackingEntry<TEntity>[] batch;
+
+            try
+            {
+                batch = await getBatchFunc(dbContext, syncContext);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error fetching batch for Entity: {EntityName} in Table: {TableName}", entityType.ClrType.Name, entityType.GetFullTableName());
+                throw;
+            }
 
             if (!batch.Any())
             {
