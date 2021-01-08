@@ -18,7 +18,10 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
         Task ProcessChanges(Type clrEntityType);
 
         Task ResetAllSyncVersions();
-        Task MarkCurrentVersionAsSynced();
+        Task MarkAllEntitiesAsSynced();
+
+        Task MarkEntityAsSynced(IEntityType entityType);
+        Task ResetSyncVersionForEntity(IEntityType entityType);
 
         Task Start(CancellationToken cancellationToken);
         Task Stop(CancellationToken cancellationToken);
