@@ -4,9 +4,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using EntityFrameworkCore.SqlChangeTracking.Extensions;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Extensions;
 using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Monitoring;
-using EntityFrameworkCore.SqlChangeTracking.SyncEngine.Options;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.Extensions.DependencyInjection;
@@ -154,6 +154,26 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
                 throw new InvalidOperationException($"No Entity Type found for ClrType: {clrEntityType.PrettyName()}");
 
             return ProcessChanges(entityType);
+        }
+
+        public async Task MarkCurrentVersionAsSynced()
+        {
+            using var serviceScope = _serviceScopeFactory.CreateScope();
+
+            await using var dbContext = serviceScope.ServiceProvider.GetRequiredService<TContext>();
+
+            var currentVersion = await dbContext.GetCurrentChangeTrackingVersion();
+
+            if (!currentVersion.HasValue)
+            {
+                _logger.LogWarning("Change Tracking is not enabled for this database");
+                return;
+            }
+
+            foreach (var syncEngineEntityType in _syncEngineEntityTypes)
+            {
+                await dbContext.SetLastChangedVersionAsync(syncEngineEntityType, SyncContext, currentVersion.Value);
+            }
         }
 
         public async Task ResetAllSyncVersions()

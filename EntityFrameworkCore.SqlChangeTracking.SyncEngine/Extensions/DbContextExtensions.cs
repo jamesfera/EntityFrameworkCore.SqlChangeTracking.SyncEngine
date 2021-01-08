@@ -132,18 +132,20 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Extensions
             return new ValueTask(db.Database.ExecuteSqlRawAsync(sqlString));
         }
 
-        public static ValueTask InitializeSyncEngine(this DbContext dbContext, IEntityType entityType, string syncContext)
+        public static ValueTask InitializeSyncEngine(this DbContext dbContext, IEntityType entityType, string syncContext, bool markAllSynced = false)
         {
+            var initialVersionString = markAllSynced ? "(SELECT CHANGE_TRACKING_CURRENT_VERSION())" : "0";
+
             var sql = $@"BEGIN
                        IF NOT EXISTS (SELECT * FROM {nameof(LastSyncedChangeVersion)} 
                                        WHERE TableName = '{entityType.GetFullTableName()}'
                                        AND SyncContext = '{syncContext}')
                        BEGIN
                            INSERT INTO {nameof(LastSyncedChangeVersion)} (TableName, SyncContext, LastSyncedVersion)
-                           VALUES ('{entityType.GetFullTableName()}', '{syncContext}', 0)
+                           VALUES ('{entityType.GetFullTableName()}', '{syncContext}', {initialVersionString})
                        END
                     END";
-            //VALUES ('{entityType.GetFullTableName()}', '{syncContext}', (SELECT CHANGE_TRACKING_CURRENT_VERSION()))
+
             return new ValueTask(dbContext.Database.ExecuteSqlRawAsync(sql));
         }
 
@@ -156,7 +158,6 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine.Extensions
             {
                 this.connection = connection;
                 _modelBuilderConfig = modelBuilderConfig;
-                
             }
 
             protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
