@@ -70,8 +70,18 @@ namespace EntityFrameworkCore.SqlChangeTracking.SyncEngine
 
                 _logger.LogInformation("Initializing Sync Engine with SyncContext: {SyncContext}", SyncContext);
 
-                _syncEngineEntityTypes = dbContext.Model.GetEntityTypes().Where(e => e.IsSyncEngineEnabled()).ToList();
-                
+                _syncEngineEntityTypes = dbContext.Model.GetEntityTypes().Where(e => e.IsSyncEngineEnabled() && !e.IsAbstract()).ToList();
+
+                var abstractSyncTypes = dbContext.Model.GetEntityTypes().Where(e => e.IsSyncEngineEnabled() && e.IsAbstract()).ToList();
+
+                foreach (var entityType in abstractSyncTypes)
+                {
+                    foreach (var type in entityType.GetConcreteDerivedTypesInclusive())
+                    {
+                        _syncEngineEntityTypes.Add(type);
+                    }
+                }
+
                 _started = true;
 
                 var databaseName = dbContext.Database.GetDbConnection().Database;
